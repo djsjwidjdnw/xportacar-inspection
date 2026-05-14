@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "xportacar-inspection",
+    "name": "XportACar Inspector",
     "slug": "xportacar-inspection",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -10,21 +10,39 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#1570EF"
     },
+    "scheme": "xportacar-inspector",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.xportacar.inspector",
+      "infoPlist": {
+        "NSCameraUsageDescription": "XportACar needs camera access to capture vehicle photos during inspection.",
+        "NSPhotoLibraryUsageDescription": "XportACar saves inspection photos to your library."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#1570EF"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.xportacar.inspector",
+      "permissions": ["CAMERA", "RECORD_AUDIO", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      ["expo-camera", { "cameraPermission": "Allow XportACar to access your camera to document vehicle inspections." }],
+      ["expo-image-picker", { "photosPermission": "Allow XportACar to access photos for vehicle inspections.", "cameraPermission": "Allow XportACar to access the camera for vehicle inspections." }],
+      ["expo-notifications", { "color": "#1570EF" }]
+    ],
+    "extra": {
+      "supabaseUrl": "https://klettmjnnttajdyajafn.supabase.co",
+      "supabaseAnonKey": "sb_publishable_rawIwWZv12q9_VxVuaMOWQ_A2oXTEJ_"
     }
   }
 }
