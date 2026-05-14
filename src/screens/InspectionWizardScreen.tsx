@@ -28,11 +28,17 @@ const PHOTO_SLOTS = [
   { key: "trunk",           label: "Trunk" },
 ] as const;
 
-const PANELS = [
-  "Front bumper", "Rear bumper", "Hood", "Roof",
-  "Left front door", "Left rear door", "Right front door", "Right rear door",
-  "Left fender", "Right fender", "Trunk lid", "Windshield",
+// Grouped damage panels — each entry maps to a labelled section so the
+// inspector can move through the car visually instead of scanning a flat
+// list.  An ASCII car outline at the top of the step orients the user.
+const PANEL_SECTIONS: ReadonlyArray<{ key: string; label: string; panels: readonly string[] }> = [
+  { key: "front", label: "Front",  panels: ["Front bumper", "Hood",       "Windshield"] },
+  { key: "left",  label: "Left side", panels: ["Left front door",   "Left rear door",   "Left fender"] },
+  { key: "right", label: "Right side", panels: ["Right front door", "Right rear door",  "Right fender"] },
+  { key: "rear",  label: "Rear",  panels: ["Rear bumper", "Trunk lid"] },
+  { key: "top",   label: "Top",   panels: ["Roof"] },
 ] as const;
+const PANELS = PANEL_SECTIONS.flatMap((s) => s.panels);
 
 const DAMAGE_LEVELS = ["none", "cosmetic", "minor", "moderate", "major"] as const;
 type DamageLevel = (typeof DAMAGE_LEVELS)[number];
@@ -304,23 +310,55 @@ export function InspectionWizardScreen({
 
         {step === 3 && (
           <Section title="3. Damage report">
-            <Text style={styles.muted}>Mark each panel. Tap to set severity.</Text>
-            {PANELS.map((p) => {
-              const d = damages[p];
-              const level = d?.level ?? "none";
-              const sev = damageStyle(level);
+            <Text style={styles.muted}>Walk around the car and mark each panel. Tap a panel to set severity.</Text>
+
+            {/* Simple ASCII car outline — orientation aid for the inspector. */}
+            <View style={styles.carOutline}>
+              <Text style={styles.carOutlineLabel}>FRONT</Text>
+              <View style={styles.carOutlineMid}>
+                <Text style={styles.carOutlineSide}>L</Text>
+                <View style={styles.carOutlineBody}>
+                  <Text style={styles.carOutlineRoof}>▢ ROOF ▢</Text>
+                </View>
+                <Text style={styles.carOutlineSide}>R</Text>
+              </View>
+              <Text style={styles.carOutlineLabel}>REAR</Text>
+            </View>
+
+            {PANEL_SECTIONS.map((sec) => {
+              const sectionDamageCount = sec.panels.filter((p) => damages[p] && damages[p].level !== "none").length;
               return (
-                <Pressable key={p} onPress={() => readOnly ? null : setPickerOpen({ panel: p })} style={styles.panelRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.panelName}>{p}</Text>
-                    {d?.description ? <Text style={styles.panelDesc}>{d.description}</Text> : null}
+                <View key={sec.key} style={styles.panelGroup}>
+                  <View style={styles.panelGroupHeader}>
+                    <Text style={styles.panelGroupTitle}>{sec.label}</Text>
+                    {sectionDamageCount > 0 ? (
+                      <View style={styles.panelGroupBadge}>
+                        <Text style={styles.panelGroupBadgeText}>{sectionDamageCount} reported</Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.panelGroupClear}>clear</Text>
+                    )}
                   </View>
-                  <View style={[styles.severityTag, { backgroundColor: sev.bg }]}>
-                    <Text style={[styles.severityText, { color: sev.fg }]}>{level}</Text>
-                  </View>
-                </Pressable>
+                  {sec.panels.map((p) => {
+                    const d = damages[p];
+                    const level = d?.level ?? "none";
+                    const sev = damageStyle(level);
+                    return (
+                      <Pressable key={p} onPress={() => readOnly ? null : setPickerOpen({ panel: p })} style={styles.panelRow}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.panelName}>{p}</Text>
+                          {d?.description ? <Text style={styles.panelDesc}>{d.description}</Text> : null}
+                        </View>
+                        <View style={[styles.severityTag, { backgroundColor: sev.bg }]}>
+                          <Text style={[styles.severityText, { color: sev.fg }]}>{level}</Text>
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+                </View>
               );
             })}
+
             <DamagePicker
               open={!!pickerOpen}
               panel={pickerOpen?.panel ?? ""}
@@ -498,6 +536,18 @@ const styles = StyleSheet.create({
   photoLabel: { fontSize: 10, color: theme.colors.textMuted, marginTop: 2, textAlign: "center", paddingHorizontal: 6 },
   photoOverlay: { position: "absolute", top: 6, right: 6, backgroundColor: theme.colors.success, width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   photoCheck: { color: theme.colors.white, fontSize: 12, fontWeight: "800" },
+  carOutline: { padding: 12, backgroundColor: theme.colors.bgAlt, borderRadius: theme.radius.lg, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 16, alignItems: "center" },
+  carOutlineLabel: { fontSize: 10, fontWeight: "800", color: theme.colors.textLight, letterSpacing: 1, marginVertical: 2 },
+  carOutlineMid: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", width: "100%", paddingHorizontal: 12, marginVertical: 4 },
+  carOutlineSide: { fontSize: 14, fontWeight: "800", color: theme.colors.textMuted, paddingHorizontal: 8 },
+  carOutlineBody: { flex: 1, borderWidth: 2, borderColor: theme.colors.borderStrong, borderRadius: theme.radius.md, paddingVertical: 18, alignItems: "center", marginHorizontal: 6 },
+  carOutlineRoof: { fontSize: 11, fontWeight: "700", color: theme.colors.textMuted, letterSpacing: 1 },
+  panelGroup: { marginBottom: 14 },
+  panelGroupHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6, paddingHorizontal: 2 },
+  panelGroupTitle: { fontSize: 13, fontWeight: "800", color: theme.colors.text, textTransform: "uppercase", letterSpacing: 0.5 },
+  panelGroupBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: theme.radius.full, backgroundColor: theme.colors.warningBg },
+  panelGroupBadgeText: { fontSize: 10, color: theme.colors.warning, fontWeight: "800", textTransform: "uppercase" },
+  panelGroupClear: { fontSize: 10, fontWeight: "700", color: theme.colors.success, textTransform: "uppercase", letterSpacing: 0.4 },
   panelRow: { flexDirection: "row", alignItems: "center", padding: 14, backgroundColor: theme.colors.white, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, marginBottom: 8 },
   panelName: { fontSize: 14, fontWeight: "600", color: theme.colors.text },
   panelDesc: { fontSize: 11, color: theme.colors.textLight, marginTop: 2 },
