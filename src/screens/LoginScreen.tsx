@@ -1,9 +1,10 @@
 import { useState } from "react";
 import {
-  Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View,
+  Alert, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { Ionicons } from "@expo/vector-icons";
 
-import { Button } from "../components/Button";
 import { supabase } from "../lib/supabase";
 import { theme } from "../lib/theme";
 import { registerForPush } from "../lib/push";
@@ -12,6 +13,7 @@ export function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showPw, setShowPw] = useState(false);
 
   const signIn = async () => {
     if (!email || !password) return Alert.alert("Missing info", "Enter email and password.");
@@ -22,48 +24,107 @@ export function LoginScreen() {
       Alert.alert("Sign in failed", error.message);
       return;
     }
-    registerForPush().catch(() => {});
+    // Push is best-effort — Expo Go SDK 53+ removed push token support so
+    // wrap defensively so a sync throw can't take the app down.
+    try { void registerForPush().catch(() => {}); } catch { /* silent */ }
   };
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1, backgroundColor: theme.colors.bg }}>
-      <ScrollView contentContainerStyle={styles.container}>
-        <View style={styles.brandRow}>
-          <View style={styles.logo}><Text style={styles.logoMark}>X</Text></View>
-          <View>
-            <Text style={styles.brand}>XportACar</Text>
-            <Text style={styles.tagline}>Inspector portal</Text>
-          </View>
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        <View style={styles.logoWrap}>
+          <Image source={require("../../assets/logo.jpg")} style={styles.logo} resizeMode="contain" />
         </View>
 
-        <Text style={styles.title}>Sign in to start inspections</Text>
-        <Text style={styles.subtitle}>Use the credentials provided by your XportACar coordinator.</Text>
+        <Text style={styles.tagline}>Inspector Portal</Text>
+        <Text style={styles.title}>Sign in</Text>
+        <Text style={styles.subtitle}>Use the credentials issued by your XportACar coordinator to start an inspection.</Text>
 
         <View style={styles.field}>
           <Text style={styles.label}>Email</Text>
-          <TextInput value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholderTextColor={theme.colors.textLight} style={styles.input} placeholder="inspector@xportacar.com" />
-        </View>
-        <View style={styles.field}>
-          <Text style={styles.label}>Password</Text>
-          <TextInput value={password} onChangeText={setPassword} secureTextEntry placeholderTextColor={theme.colors.textLight} style={styles.input} />
+          <View style={styles.inputWrap}>
+            <Ionicons name="mail-outline" size={16} color={theme.colors.textLight} style={styles.inputIcon} />
+            <TextInput
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              autoComplete="email"
+              keyboardType="email-address"
+              placeholderTextColor={theme.colors.textLight}
+              style={styles.input}
+              placeholder="inspector@xportacar.com"
+            />
+          </View>
         </View>
 
-        <Button label={loading ? "Signing in…" : "Sign in"} onPress={signIn} loading={loading} fullWidth style={{ marginTop: 4 }} />
+        <View style={styles.field}>
+          <Text style={styles.label}>Password</Text>
+          <View style={styles.inputWrap}>
+            <Ionicons name="lock-closed-outline" size={16} color={theme.colors.textLight} style={styles.inputIcon} />
+            <TextInput
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry={!showPw}
+              autoComplete="password"
+              placeholderTextColor={theme.colors.textLight}
+              style={styles.input}
+              placeholder="••••••••"
+            />
+            <Pressable onPress={() => setShowPw((v) => !v)} hitSlop={8} style={styles.eyeBtn}>
+              <Ionicons name={showPw ? "eye-off-outline" : "eye-outline"} size={18} color={theme.colors.textLight} />
+            </Pressable>
+          </View>
+        </View>
+
+        <Pressable onPress={signIn} disabled={loading} style={({ pressed }) => [styles.btnShadow, pressed && { opacity: 0.92 }]}>
+          <LinearGradient
+            colors={[theme.colors.brand, theme.colors.brandDark]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.btn}
+          >
+            <Ionicons name="log-in-outline" size={18} color={theme.colors.white} />
+            <Text style={styles.btnText}>{loading ? "Signing in…" : "Sign in"}</Text>
+          </LinearGradient>
+        </Pressable>
+
+        <Text style={styles.foot}>Need access? Contact your coordinator.</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 24, paddingTop: 72, paddingBottom: 48 },
-  brandRow:  { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 48 },
-  logo:      { width: 40, height: 40, borderRadius: 10, backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center" },
-  logoMark:  { color: theme.colors.white, fontWeight: "800", fontSize: 20 },
-  brand:     { fontSize: 18, fontWeight: "800", color: theme.colors.text },
-  tagline:   { fontSize: 11, color: theme.colors.textLight, fontWeight: "600" },
-  title:     { fontSize: 26, fontWeight: "800", color: theme.colors.text },
-  subtitle:  { marginTop: 6, color: theme.colors.textMuted, fontSize: 14, marginBottom: 24 },
+  container: { padding: 24, paddingTop: 56, paddingBottom: 48 },
+  logoWrap:  { alignItems: "center", marginBottom: 24 },
+  logo:      { width: 180, height: 90 },
+  tagline:   { fontSize: 11, fontWeight: "800", color: theme.colors.brand, letterSpacing: 1.5, textAlign: "center", textTransform: "uppercase" },
+  title:     { fontSize: 28, fontWeight: "800", color: theme.colors.text, textAlign: "center", marginTop: 6 },
+  subtitle:  { color: theme.colors.textMuted, fontSize: 13, textAlign: "center", marginTop: 8, marginBottom: 32, lineHeight: 20, paddingHorizontal: 8 },
   field:     { marginBottom: 14 },
-  label:     { fontSize: 13, fontWeight: "600", color: theme.colors.text, marginBottom: 6 },
-  input:     { height: 46, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.borderStrong, paddingHorizontal: 14, fontSize: 15, color: theme.colors.text, backgroundColor: theme.colors.white },
+  label:     { fontSize: 11, fontWeight: "800", color: theme.colors.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 },
+  inputWrap: {
+    flexDirection: "row", alignItems: "center",
+    height: 50, borderRadius: theme.radius.lg, borderWidth: 1,
+    borderColor: theme.colors.border, backgroundColor: theme.colors.white,
+    paddingHorizontal: 14,
+  },
+  inputIcon: { marginRight: 10 },
+  input:     { flex: 1, fontSize: 15, color: theme.colors.text },
+  eyeBtn:    { padding: 4 },
+  btnShadow: {
+    marginTop: 8,
+    borderRadius: theme.radius.lg,
+    shadowColor: theme.colors.brand,
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  btn:       {
+    height: 52, borderRadius: theme.radius.lg, alignItems: "center", justifyContent: "center",
+    flexDirection: "row", gap: 8,
+  },
+  btnText:   { color: theme.colors.white, fontSize: 16, fontWeight: "800", letterSpacing: 0.3 },
+  foot:      { fontSize: 12, color: theme.colors.textLight, textAlign: "center", marginTop: 24 },
 });

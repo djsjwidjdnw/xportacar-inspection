@@ -26,8 +26,6 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1570EF"
       },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false,
       "package": "com.xportacar.inspector",
       "permissions": ["CAMERA", "RECORD_AUDIO", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"]
     },
@@ -37,8 +35,7 @@
     "plugins": [
       "expo-secure-store",
       ["expo-camera", { "cameraPermission": "Allow XportACar to access your camera to document vehicle inspections." }],
-      ["expo-image-picker", { "photosPermission": "Allow XportACar to access photos for vehicle inspections.", "cameraPermission": "Allow XportACar to access the camera for vehicle inspections." }],
-      ["expo-notifications", { "color": "#1570EF" }]
+      ["expo-image-picker", { "photosPermission": "Allow XportACar to access photos for vehicle inspections.", "cameraPermission": "Allow XportACar to access the camera for vehicle inspections." }]
     ],
     "extra": {
       "supabaseUrl": "https://klettmjnnttajdyajafn.supabase.co",

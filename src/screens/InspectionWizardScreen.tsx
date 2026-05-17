@@ -1,18 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, ScrollView,
+  ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView,
   StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
+import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 
 import { Button } from "../components/Button";
+import { Spinner } from "../components/Spinner";
 import { supabase } from "../lib/supabase";
 import { theme, formatKm } from "../lib/theme";
 import { useAuth } from "../lib/auth";
 import type { VehicleRow } from "../lib/types";
 
 // ---- Step config ----------------------------------------------------
+const STEPS = [
+  { n: 1, label: "Details",   icon: "document-text-outline" as const },
+  { n: 2, label: "Photos",    icon: "camera-outline" as const },
+  { n: 3, label: "Damage",    icon: "warning-outline" as const },
+  { n: 4, label: "Documents", icon: "folder-open-outline" as const },
+  { n: 5, label: "Review",    icon: "checkmark-done-outline" as const },
+] as const;
+
 const PHOTO_SLOTS = [
   { key: "front",           label: "Front" },
   { key: "rear",            label: "Rear" },
@@ -38,7 +49,6 @@ const PANEL_SECTIONS: ReadonlyArray<{ key: string; label: string; panels: readon
   { key: "rear",  label: "Rear",  panels: ["Rear bumper", "Trunk lid"] },
   { key: "top",   label: "Top",   panels: ["Roof"] },
 ] as const;
-const PANELS = PANEL_SECTIONS.flatMap((s) => s.panels);
 
 const DAMAGE_LEVELS = ["none", "cosmetic", "minor", "moderate", "major"] as const;
 type DamageLevel = (typeof DAMAGE_LEVELS)[number];
@@ -257,47 +267,71 @@ export function InspectionWizardScreen({
     }
   };
 
-  if (loading) return <View style={styles.center}><ActivityIndicator color={theme.colors.brand} size="large" /></View>;
+  if (loading) return <Spinner label="Loading vehicle…" />;
+
+  const currentStep = STEPS.find((s) => s.n === step)!;
+  const photoProgress = Object.keys(photos).length / PHOTO_SLOTS.length;
+  const docProgress   = Object.keys(docs).length / DOC_SLOTS.length;
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.bg }}>
       <Stepper step={step} />
 
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+        <View style={styles.stepHeader}>
+          <View style={styles.stepHeaderIcon}>
+            <Ionicons name={currentStep.icon} size={20} color={theme.colors.brand} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.stepEyebrow}>Step {step} of {STEPS.length}</Text>
+            <Text style={styles.stepTitle}>{currentStep.label}</Text>
+          </View>
+        </View>
+
         {step === 1 && (
-          <Section title="1. Vehicle details">
-            <Field label="VIN" required><TextInput value={vin} onChangeText={setVin} autoCapitalize="characters" maxLength={17} style={styles.input} editable={!readOnly} /></Field>
+          <Card>
+            <Field label="VIN" required><TextInput value={vin} onChangeText={setVin} autoCapitalize="characters" maxLength={17} style={styles.input} editable={!readOnly} placeholder="WBA1234567890XXXX" placeholderTextColor={theme.colors.textLight} /></Field>
             <View style={{ flexDirection: "row", gap: 10 }}>
-              <Field label="Make" required style={{ flex: 1 }}><TextInput value={make} onChangeText={setMake} style={styles.input} editable={!readOnly} /></Field>
-              <Field label="Year" required style={{ flex: 1 }}><TextInput value={year} onChangeText={setYear} keyboardType="number-pad" style={styles.input} editable={!readOnly} /></Field>
+              <Field label="Make" required style={{ flex: 1 }}><TextInput value={make} onChangeText={setMake} style={styles.input} editable={!readOnly} placeholder="BMW" placeholderTextColor={theme.colors.textLight} /></Field>
+              <Field label="Year" required style={{ flex: 1 }}><TextInput value={year} onChangeText={setYear} keyboardType="number-pad" style={styles.input} editable={!readOnly} placeholder="2023" placeholderTextColor={theme.colors.textLight} /></Field>
             </View>
-            <Field label="Model" required><TextInput value={model} onChangeText={setModel} style={styles.input} editable={!readOnly} /></Field>
+            <Field label="Model" required><TextInput value={model} onChangeText={setModel} style={styles.input} editable={!readOnly} placeholder="X5" placeholderTextColor={theme.colors.textLight} /></Field>
             <View style={{ flexDirection: "row", gap: 10 }}>
-              <Field label="Mileage (km)" style={{ flex: 1 }}><TextInput value={mileage} onChangeText={setMileage} keyboardType="number-pad" style={styles.input} editable={!readOnly} /></Field>
-              <Field label="Exterior color" style={{ flex: 1 }}><TextInput value={color} onChangeText={setColor} style={styles.input} editable={!readOnly} /></Field>
+              <Field label="Mileage (km)" style={{ flex: 1 }}><TextInput value={mileage} onChangeText={setMileage} keyboardType="number-pad" style={styles.input} editable={!readOnly} placeholder="42 000" placeholderTextColor={theme.colors.textLight} /></Field>
+              <Field label="Exterior color" style={{ flex: 1 }}><TextInput value={color} onChangeText={setColor} style={styles.input} editable={!readOnly} placeholder="White" placeholderTextColor={theme.colors.textLight} /></Field>
             </View>
             <Field label="City"><TextInput value={city} onChangeText={setCity} style={styles.input} editable={!readOnly} /></Field>
             <View style={{ flexDirection: "row", gap: 10 }}>
-              <Field label="Seller name" style={{ flex: 1 }}><TextInput value={sellerName} onChangeText={setSellerName} style={styles.input} editable={!readOnly} /></Field>
-              <Field label="Seller phone" style={{ flex: 1 }}><TextInput value={sellerPhone} onChangeText={setSellerPhone} keyboardType="phone-pad" style={styles.input} editable={!readOnly} /></Field>
+              <Field label="Seller name" style={{ flex: 1 }}><TextInput value={sellerName} onChangeText={setSellerName} style={styles.input} editable={!readOnly} placeholder="Ahmed Al Rashid" placeholderTextColor={theme.colors.textLight} /></Field>
+              <Field label="Seller phone" style={{ flex: 1 }}><TextInput value={sellerPhone} onChangeText={setSellerPhone} keyboardType="phone-pad" style={styles.input} editable={!readOnly} placeholder="+971 50 …" placeholderTextColor={theme.colors.textLight} /></Field>
             </View>
-          </Section>
+          </Card>
         )}
 
         {step === 2 && (
-          <Section title="2. Required photos">
-            <Text style={styles.muted}>Capture every angle. Green ✓ = uploaded.</Text>
+          <View>
+            <ProgressBar value={photoProgress} label={`${Object.keys(photos).length} of ${PHOTO_SLOTS.length} required photos captured`} />
+            <Text style={styles.tip}>Tap a tile to capture. Green check = uploaded.</Text>
             <View style={styles.photoGrid}>
               {PHOTO_SLOTS.map((s) => (
-                <Pressable key={s.key} onPress={() => takePhoto(s.key, "photo")} style={styles.photoTile} disabled={readOnly || uploading !== null}>
+                <Pressable
+                  key={s.key}
+                  onPress={() => takePhoto(s.key, "photo")}
+                  style={({ pressed }) => [
+                    styles.photoTile,
+                    photos[s.key] && styles.photoTileDone,
+                    pressed && { opacity: 0.92 },
+                  ]}
+                  disabled={readOnly || uploading !== null}
+                >
                   {photos[s.key] ? (
                     <>
                       <Image source={{ uri: photos[s.key] }} style={StyleSheet.absoluteFill} contentFit="cover" />
-                      <View style={styles.photoOverlay}><Text style={styles.photoCheck}>✓</Text></View>
+                      <View style={styles.photoOverlay}><Ionicons name="checkmark" size={14} color={theme.colors.white} /></View>
                     </>
                   ) : (
                     <View style={styles.photoEmpty}>
-                      <Text style={styles.photoIcon}>📷</Text>
+                      <Ionicons name="camera" size={22} color={theme.colors.textLight} />
                       <Text style={styles.photoLabel}>{s.label}</Text>
                       {uploading === s.key && <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginTop: 4 }} />}
                     </View>
@@ -305,12 +339,12 @@ export function InspectionWizardScreen({
                 </Pressable>
               ))}
             </View>
-          </Section>
+          </View>
         )}
 
         {step === 3 && (
-          <Section title="3. Damage report">
-            <Text style={styles.muted}>Walk around the car and mark each panel. Tap a panel to set severity.</Text>
+          <View>
+            <Text style={styles.tip}>Walk around the car and tag every panel that has damage.</Text>
 
             {/* Simple ASCII car outline — orientation aid for the inspector. */}
             <View style={styles.carOutline}>
@@ -333,10 +367,14 @@ export function InspectionWizardScreen({
                     <Text style={styles.panelGroupTitle}>{sec.label}</Text>
                     {sectionDamageCount > 0 ? (
                       <View style={styles.panelGroupBadge}>
+                        <Ionicons name="warning-outline" size={11} color={theme.colors.warning} />
                         <Text style={styles.panelGroupBadgeText}>{sectionDamageCount} reported</Text>
                       </View>
                     ) : (
-                      <Text style={styles.panelGroupClear}>clear</Text>
+                      <View style={[styles.panelGroupBadge, { backgroundColor: theme.colors.successBg }]}>
+                        <Ionicons name="checkmark-circle" size={11} color={theme.colors.success} />
+                        <Text style={[styles.panelGroupBadgeText, { color: theme.colors.success }]}>clear</Text>
+                      </View>
                     )}
                   </View>
                   {sec.panels.map((p) => {
@@ -344,7 +382,11 @@ export function InspectionWizardScreen({
                     const level = d?.level ?? "none";
                     const sev = damageStyle(level);
                     return (
-                      <Pressable key={p} onPress={() => readOnly ? null : setPickerOpen({ panel: p })} style={styles.panelRow}>
+                      <Pressable
+                        key={p}
+                        onPress={() => readOnly ? null : setPickerOpen({ panel: p })}
+                        style={({ pressed }) => [styles.panelRow, pressed && { opacity: 0.95 }]}
+                      >
                         <View style={{ flex: 1 }}>
                           <Text style={styles.panelName}>{p}</Text>
                           {d?.description ? <Text style={styles.panelDesc}>{d.description}</Text> : null}
@@ -369,23 +411,33 @@ export function InspectionWizardScreen({
                 setPickerOpen(null);
               }}
             />
-          </Section>
+          </View>
         )}
 
         {step === 4 && (
-          <Section title="4. Documents">
-            <Text style={styles.muted}>Capture registration, service book and insurance via camera.</Text>
+          <View>
+            <ProgressBar value={docProgress} label={`${Object.keys(docs).length} of ${DOC_SLOTS.length} documents captured`} />
+            <Text style={styles.tip}>Capture each document with the camera. Make sure text is readable.</Text>
             <View style={styles.photoGrid}>
               {DOC_SLOTS.map((s) => (
-                <Pressable key={s.key} onPress={() => takePhoto(s.key, "document")} style={styles.photoTile} disabled={readOnly || uploading !== null}>
+                <Pressable
+                  key={s.key}
+                  onPress={() => takePhoto(s.key, "document")}
+                  style={({ pressed }) => [
+                    styles.photoTile,
+                    docs[s.key] && styles.photoTileDone,
+                    pressed && { opacity: 0.92 },
+                  ]}
+                  disabled={readOnly || uploading !== null}
+                >
                   {docs[s.key] ? (
                     <>
                       <Image source={{ uri: docs[s.key] }} style={StyleSheet.absoluteFill} contentFit="cover" />
-                      <View style={styles.photoOverlay}><Text style={styles.photoCheck}>✓</Text></View>
+                      <View style={styles.photoOverlay}><Ionicons name="checkmark" size={14} color={theme.colors.white} /></View>
                     </>
                   ) : (
                     <View style={styles.photoEmpty}>
-                      <Text style={styles.photoIcon}>📄</Text>
+                      <Ionicons name="document-text-outline" size={22} color={theme.colors.textLight} />
                       <Text style={styles.photoLabel}>{s.label}</Text>
                       {uploading === s.key && <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginTop: 4 }} />}
                     </View>
@@ -393,43 +445,106 @@ export function InspectionWizardScreen({
                 </Pressable>
               ))}
             </View>
-          </Section>
+          </View>
         )}
 
         {step === 5 && (
-          <Section title="5. Review & submit">
-            <View style={styles.reviewCard}>
-              <Text style={styles.reviewTitle}>{year} {make} {model}</Text>
-              <Text style={styles.reviewSub}>VIN {vin} · {formatKm(Number(mileage) || 0)} · {color}</Text>
-            </View>
+          <View>
+            <Card>
+              <Text style={styles.reviewEyebrow}>Vehicle</Text>
+              <Text style={styles.reviewTitle}>{year || "—"} {make || "—"} {model || "—"}</Text>
+              <Text style={styles.reviewSub}>VIN {vin || "—"} · {formatKm(Number(mileage) || 0)} · {color || "—"}</Text>
+            </Card>
 
             <View style={styles.summaryRow}>
-              <View style={styles.summaryItem}><Text style={styles.summaryNum}>{Object.keys(photos).length}/{PHOTO_SLOTS.length}</Text><Text style={styles.summaryLabel}>Photos</Text></View>
-              <View style={styles.summaryItem}><Text style={styles.summaryNum}>{Object.values(damages).filter((d) => d.level !== "none").length}</Text><Text style={styles.summaryLabel}>Damages</Text></View>
-              <View style={styles.summaryItem}><Text style={styles.summaryNum}>{Object.keys(docs).length}/{DOC_SLOTS.length}</Text><Text style={styles.summaryLabel}>Documents</Text></View>
+              <SummaryCard icon="camera-outline" value={`${Object.keys(photos).length}/${PHOTO_SLOTS.length}`} label="Photos" complete={Object.keys(photos).length === PHOTO_SLOTS.length} />
+              <SummaryCard icon="warning-outline" value={String(Object.values(damages).filter((d) => d.level !== "none").length)} label="Damages" />
+              <SummaryCard icon="folder-open-outline" value={`${Object.keys(docs).length}/${DOC_SLOTS.length}`} label="Documents" complete={Object.keys(docs).length === DOC_SLOTS.length} />
             </View>
 
             {!readOnly && (
-              <Button label={submitting ? "Submitting…" : "Submit inspection"} onPress={submit} loading={submitting} fullWidth style={{ marginTop: 16 }} />
+              <Pressable onPress={submit} disabled={submitting} style={({ pressed }) => [styles.submitShadow, pressed && { opacity: 0.92 }]}>
+                <LinearGradient
+                  colors={[theme.colors.brand, theme.colors.brandDark]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.submitBtn}
+                >
+                  {submitting && <ActivityIndicator color={theme.colors.white} />}
+                  <Ionicons name="checkmark-done-outline" size={20} color={theme.colors.white} />
+                  <Text style={styles.submitText}>{submitting ? "Submitting…" : "Submit inspection"}</Text>
+                </LinearGradient>
+              </Pressable>
             )}
-          </Section>
+          </View>
         )}
       </ScrollView>
 
       {/* Step nav */}
       <View style={styles.navBar}>
         <Button label="Back" variant="outline" onPress={() => step === 1 ? navigation.goBack() : setStep((s) => s - 1)} style={{ flex: 1 }} />
-        {step < 5 && <Button label="Next" onPress={() => setStep((s) => Math.min(5, s + 1))} style={{ flex: 1 }} />}
+        {step < STEPS.length && <Button label="Next" onPress={() => setStep((s) => Math.min(STEPS.length, s + 1))} style={{ flex: 1 }} />}
       </View>
     </View>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Stepper({ step }: { step: number }) {
+  const pct = ((step - 1) / (STEPS.length - 1)) * 100;
   return (
-    <View style={{ marginBottom: 12 }}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {children}
+    <View style={styles.stepperWrap}>
+      <View style={styles.stepperTrack}>
+        <View style={[styles.stepperFill, { width: `${pct}%` }]} />
+      </View>
+      <View style={styles.stepperDots}>
+        {STEPS.map((s) => {
+          const done = s.n < step;
+          const active = s.n === step;
+          return (
+            <View key={s.n} style={styles.stepperItem}>
+              <View
+                style={[
+                  styles.stepDot,
+                  (done || active) && { backgroundColor: theme.colors.brand, borderColor: theme.colors.brand },
+                ]}
+              >
+                {done ? (
+                  <Ionicons name="checkmark" size={14} color={theme.colors.white} />
+                ) : (
+                  <Text style={[styles.stepDotText, active && { color: theme.colors.white }]}>{s.n}</Text>
+                )}
+              </View>
+              <Text style={[styles.stepLabel, active && { color: theme.colors.brand, fontWeight: "800" }]}>{s.label}</Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function ProgressBar({ value, label }: { value: number; label: string }) {
+  const pct = Math.max(0, Math.min(1, value)) * 100;
+  return (
+    <View style={{ marginBottom: 14 }}>
+      <View style={styles.progressTrack}>
+        <View style={[styles.progressFill, { width: `${pct}%` }]} />
+      </View>
+      <Text style={styles.progressLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function Card({ children }: { children: React.ReactNode }) {
+  return <View style={styles.card}>{children}</View>;
+}
+
+function SummaryCard({ icon, value, label, complete }: { icon: keyof typeof Ionicons.glyphMap; value: string; label: string; complete?: boolean }) {
+  return (
+    <View style={styles.summaryItem}>
+      <Ionicons name={icon} size={18} color={complete ? theme.colors.success : theme.colors.textMuted} />
+      <Text style={[styles.summaryNum, complete && { color: theme.colors.success }]}>{value}</Text>
+      <Text style={styles.summaryLabel}>{label}</Text>
     </View>
   );
 }
@@ -439,18 +554,6 @@ function Field({ label, required, style, children }: { label: string; required?:
     <View style={[{ marginBottom: 12 }, style]}>
       <Text style={styles.label}>{label}{required && <Text style={{ color: theme.colors.error }}>  *</Text>}</Text>
       {children}
-    </View>
-  );
-}
-
-function Stepper({ step }: { step: number }) {
-  return (
-    <View style={styles.stepper}>
-      {[1, 2, 3, 4, 5].map((n) => (
-        <View key={n} style={[styles.stepDot, n <= step && { backgroundColor: theme.colors.brand }]}>
-          <Text style={[styles.stepDotText, n <= step && { color: theme.colors.white }]}>{n}</Text>
-        </View>
-      ))}
     </View>
   );
 }
@@ -483,7 +586,7 @@ function DamagePicker({
       <View style={styles.modalScrim}>
         <View style={styles.modalCard}>
           <Text style={styles.modalTitle}>{panel}</Text>
-          <Text style={styles.muted}>Set damage severity and add a quick note.</Text>
+          <Text style={styles.modalSub}>Set damage severity and add a quick note.</Text>
 
           <View style={styles.levelRow}>
             {DAMAGE_LEVELS.map((l) => {
@@ -521,49 +624,90 @@ function DamagePicker({
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  stepper: { flexDirection: "row", justifyContent: "center", gap: 6, paddingVertical: 12, paddingHorizontal: 16, backgroundColor: theme.colors.white, borderBottomWidth: 1, borderBottomColor: theme.colors.border },
-  stepDot: { width: 30, height: 30, borderRadius: 15, backgroundColor: theme.colors.bgAlt, alignItems: "center", justifyContent: "center" },
-  stepDotText: { fontSize: 12, fontWeight: "700", color: theme.colors.textMuted },
-  sectionTitle: { fontSize: 18, fontWeight: "800", color: theme.colors.text, marginBottom: 12 },
-  label: { fontSize: 12, fontWeight: "700", color: theme.colors.textMuted, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 },
-  input: { height: 46, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.borderStrong, paddingHorizontal: 14, fontSize: 15, color: theme.colors.text, backgroundColor: theme.colors.white },
-  muted: { color: theme.colors.textLight, fontSize: 12, marginBottom: 10 },
+  // Stepper
+  stepperWrap: { backgroundColor: theme.colors.white, paddingTop: 18, paddingBottom: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: theme.colors.border },
+  stepperTrack: { position: "absolute", top: 32, left: 32, right: 32, height: 2, backgroundColor: theme.colors.border, borderRadius: 1 },
+  stepperFill:  { height: 2, backgroundColor: theme.colors.brand, borderRadius: 1 },
+  stepperDots:  { flexDirection: "row", justifyContent: "space-between" },
+  stepperItem:  { alignItems: "center", flex: 1 },
+  stepDot:      { width: 28, height: 28, borderRadius: 14, backgroundColor: theme.colors.white, borderWidth: 2, borderColor: theme.colors.border, alignItems: "center", justifyContent: "center" },
+  stepDotText:  { fontSize: 12, fontWeight: "800", color: theme.colors.textMuted },
+  stepLabel:    { fontSize: 10, fontWeight: "700", color: theme.colors.textLight, marginTop: 6, textAlign: "center" },
+
+  // Step header
+  stepHeader: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 16 },
+  stepHeaderIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center" },
+  stepEyebrow: { fontSize: 10, fontWeight: "800", color: theme.colors.textLight, letterSpacing: 1, textTransform: "uppercase" },
+  stepTitle:   { fontSize: 22, fontWeight: "800", color: theme.colors.text, marginTop: 2 },
+
+  // Progress bar
+  progressTrack: { height: 6, backgroundColor: theme.colors.bgAlt, borderRadius: 3, overflow: "hidden" },
+  progressFill:  { height: 6, backgroundColor: theme.colors.brand, borderRadius: 3 },
+  progressLabel: { fontSize: 11, color: theme.colors.textLight, marginTop: 6, fontWeight: "600" },
+  tip:           { fontSize: 12, color: theme.colors.textLight, marginBottom: 12 },
+
+  // Card
+  card: {
+    padding: 16, borderRadius: theme.radius.xl, backgroundColor: theme.colors.white,
+    shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+  },
+
+  // Forms
+  label: { fontSize: 11, fontWeight: "800", color: theme.colors.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 },
+  input: { height: 46, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.border, paddingHorizontal: 14, fontSize: 14, color: theme.colors.text, backgroundColor: theme.colors.white },
+
+  // Photo grid
   photoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  photoTile: { width: "31%", aspectRatio: 1, borderRadius: theme.radius.md, backgroundColor: theme.colors.white, borderWidth: 1, borderColor: theme.colors.border, overflow: "hidden", alignItems: "center", justifyContent: "center", position: "relative" },
-  photoEmpty: { alignItems: "center", justifyContent: "center" },
-  photoIcon: { fontSize: 22 },
-  photoLabel: { fontSize: 10, color: theme.colors.textMuted, marginTop: 2, textAlign: "center", paddingHorizontal: 6 },
+  photoTile: {
+    width: "31%", aspectRatio: 1, borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.white, borderWidth: 1, borderColor: theme.colors.border,
+    overflow: "hidden", alignItems: "center", justifyContent: "center", position: "relative",
+  },
+  photoTileDone: { borderColor: theme.colors.success, borderWidth: 2 },
+  photoEmpty: { alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
+  photoLabel: { fontSize: 10, fontWeight: "600", color: theme.colors.textMuted, marginTop: 6, textAlign: "center" },
   photoOverlay: { position: "absolute", top: 6, right: 6, backgroundColor: theme.colors.success, width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
-  photoCheck: { color: theme.colors.white, fontSize: 12, fontWeight: "800" },
+
+  // Car outline
   carOutline: { padding: 12, backgroundColor: theme.colors.bgAlt, borderRadius: theme.radius.lg, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 16, alignItems: "center" },
   carOutlineLabel: { fontSize: 10, fontWeight: "800", color: theme.colors.textLight, letterSpacing: 1, marginVertical: 2 },
   carOutlineMid: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", width: "100%", paddingHorizontal: 12, marginVertical: 4 },
   carOutlineSide: { fontSize: 14, fontWeight: "800", color: theme.colors.textMuted, paddingHorizontal: 8 },
   carOutlineBody: { flex: 1, borderWidth: 2, borderColor: theme.colors.borderStrong, borderRadius: theme.radius.md, paddingVertical: 18, alignItems: "center", marginHorizontal: 6 },
   carOutlineRoof: { fontSize: 11, fontWeight: "700", color: theme.colors.textMuted, letterSpacing: 1 },
+
+  // Panel groups
   panelGroup: { marginBottom: 14 },
   panelGroupHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6, paddingHorizontal: 2 },
-  panelGroupTitle: { fontSize: 13, fontWeight: "800", color: theme.colors.text, textTransform: "uppercase", letterSpacing: 0.5 },
-  panelGroupBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: theme.radius.full, backgroundColor: theme.colors.warningBg },
+  panelGroupTitle: { fontSize: 12, fontWeight: "800", color: theme.colors.text, textTransform: "uppercase", letterSpacing: 0.5 },
+  panelGroupBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: theme.radius.full, backgroundColor: theme.colors.warningBg },
   panelGroupBadgeText: { fontSize: 10, color: theme.colors.warning, fontWeight: "800", textTransform: "uppercase" },
-  panelGroupClear: { fontSize: 10, fontWeight: "700", color: theme.colors.success, textTransform: "uppercase", letterSpacing: 0.4 },
-  panelRow: { flexDirection: "row", alignItems: "center", padding: 14, backgroundColor: theme.colors.white, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, marginBottom: 8 },
-  panelName: { fontSize: 14, fontWeight: "600", color: theme.colors.text },
+  panelRow: { flexDirection: "row", alignItems: "center", padding: 14, backgroundColor: theme.colors.white, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.lg, marginBottom: 8 },
+  panelName: { fontSize: 14, fontWeight: "700", color: theme.colors.text },
   panelDesc: { fontSize: 11, color: theme.colors.textLight, marginTop: 2 },
   severityTag: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: theme.radius.full },
   severityText: { fontSize: 10, fontWeight: "800", textTransform: "uppercase" },
-  navBar: { flexDirection: "row", gap: 10, padding: 16, backgroundColor: theme.colors.white, borderTopWidth: 1, borderTopColor: theme.colors.border },
-  reviewCard: { padding: 16, borderRadius: theme.radius.lg, backgroundColor: theme.colors.white, borderWidth: 1, borderColor: theme.colors.border },
-  reviewTitle: { fontSize: 18, fontWeight: "800", color: theme.colors.text },
+
+  // Review step
+  reviewEyebrow: { fontSize: 10, fontWeight: "800", color: theme.colors.textLight, textTransform: "uppercase", letterSpacing: 0.5 },
+  reviewTitle: { fontSize: 20, fontWeight: "800", color: theme.colors.text, marginTop: 4 },
   reviewSub: { fontSize: 12, color: theme.colors.textLight, marginTop: 4 },
   summaryRow: { flexDirection: "row", gap: 8, marginTop: 12 },
-  summaryItem: { flex: 1, padding: 14, alignItems: "center", borderRadius: theme.radius.md, backgroundColor: theme.colors.white, borderWidth: 1, borderColor: theme.colors.border },
-  summaryNum: { fontSize: 22, fontWeight: "800", color: theme.colors.text },
-  summaryLabel: { fontSize: 11, color: theme.colors.textLight, marginTop: 2, textTransform: "uppercase" },
+  summaryItem: { flex: 1, padding: 14, alignItems: "center", borderRadius: theme.radius.lg, backgroundColor: theme.colors.white, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  summaryNum: { fontSize: 20, fontWeight: "800", color: theme.colors.text, marginTop: 4 },
+  summaryLabel: { fontSize: 10, color: theme.colors.textLight, marginTop: 2, textTransform: "uppercase", fontWeight: "700", letterSpacing: 0.4 },
+  submitShadow: { marginTop: 20, borderRadius: theme.radius.lg, shadowColor: theme.colors.brand, shadowOpacity: 0.3, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
+  submitBtn: { height: 54, borderRadius: theme.radius.lg, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 10 },
+  submitText: { color: theme.colors.white, fontSize: 16, fontWeight: "800" },
+
+  // Nav bar
+  navBar: { flexDirection: "row", gap: 10, padding: 16, backgroundColor: theme.colors.white, borderTopWidth: 1, borderTopColor: theme.colors.border },
+
+  // Modal
   modalScrim: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", padding: 16, justifyContent: "flex-end" },
   modalCard: { backgroundColor: theme.colors.white, borderRadius: theme.radius.xl, padding: 20, ...Platform.select({ ios: { paddingBottom: 32 }, default: { paddingBottom: 16 } }) },
-  modalTitle: { fontSize: 18, fontWeight: "800", color: theme.colors.text, marginBottom: 4 },
+  modalTitle: { fontSize: 18, fontWeight: "800", color: theme.colors.text },
+  modalSub:   { color: theme.colors.textLight, fontSize: 12, marginTop: 4, marginBottom: 4 },
   levelRow: { flexDirection: "row", gap: 6, marginVertical: 14, flexWrap: "wrap" },
   levelBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: theme.radius.full },
   levelText: { fontSize: 12, fontWeight: "800", textTransform: "uppercase" },
