@@ -39,6 +39,8 @@ const PHOTO_SLOTS = [
   { key: "trunk",           label: "Trunk" },
 ] as const;
 
+const MAX_OTHER_PHOTOS = 10;
+
 // Grouped damage panels — each entry maps to a labelled section so the
 // inspector can move through the car visually instead of scanning a flat
 // list.  An ASCII car outline at the top of the step orients the user.
@@ -53,6 +55,12 @@ const PANEL_SECTIONS: ReadonlyArray<{ key: string; label: string; panels: readon
 const DAMAGE_LEVELS = ["none", "cosmetic", "minor", "moderate", "major"] as const;
 type DamageLevel = (typeof DAMAGE_LEVELS)[number];
 
+interface DamageState {
+  level: DamageLevel;
+  description: string;
+  photoUrl?: string;
+}
+
 const DOC_SLOTS = [
   { key: "registration",  label: "Registration" },
   { key: "service_book",  label: "Service book" },
@@ -60,6 +68,8 @@ const DOC_SLOTS = [
 ] as const;
 
 const STORAGE_BUCKET = "vehicle-photos";
+
+type UploadKind = "photo" | "document" | "other" | "damage";
 
 // ---- Component ------------------------------------------------------
 
@@ -90,10 +100,11 @@ export function InspectionWizardScreen({
 
   // Photo state — record of slot key -> uploaded URL
   const [photos, setPhotos] = useState<Record<string, string>>({});
+  const [otherPhotos, setOtherPhotos] = useState<string[]>([]);
   const [uploading, setUploading] = useState<string | null>(null);
 
-  // Damage state — record of panel name -> { level, description }
-  const [damages, setDamages] = useState<Record<string, { level: DamageLevel; description: string }>>({});
+  // Damage state — record of panel name -> { level, description, photoUrl? }
+  const [damages, setDamages] = useState<Record<string, DamageState>>({});
   const [pickerOpen, setPickerOpen] = useState<{ panel: string } | null>(null);
 
   // Documents
@@ -129,11 +140,17 @@ export function InspectionWizardScreen({
     try { await supabase.storage.createBucket(STORAGE_BUCKET, { public: true }); } catch { /* already exists */ }
   }, []);
 
-  const uploadOne = useCallback(async (slotKey: string, asset: ImagePicker.ImagePickerAsset, prefix: "photos" | "documents") => {
+  const uploadOne = useCallback(async (
+    slotKey: string,
+    asset: ImagePicker.ImagePickerAsset,
+    prefix: "photos" | "documents" | "other" | "damages",
+  ) => {
     await ensureBucket();
     const ext = asset.uri.split(".").pop()?.toLowerCase() ?? "jpg";
     const ts  = Date.now();
-    const key = `${prefix}/${user?.id ?? "anon"}/${ts}-${slotKey}.${ext}`;
+    // Sanitise slotKey for the storage path — panel names contain spaces.
+    const safe = slotKey.replace(/[^a-z0-9-]+/gi, "_").toLowerCase();
+    const key  = `${prefix}/${user?.id ?? "anon"}/${ts}-${safe}.${ext}`;
 
     // Read the file as a blob via fetch — works on iOS + Android + web.
     const res = await fetch(asset.uri);
@@ -148,7 +165,7 @@ export function InspectionWizardScreen({
     return publicUrl.publicUrl;
   }, [ensureBucket, user]);
 
-  const takePhoto = async (slotKey: string, kind: "photo" | "document") => {
+  const takePhoto = async (slotKey: string, kind: UploadKind) => {
     if (readOnly) return;
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) {
@@ -163,9 +180,21 @@ export function InspectionWizardScreen({
     if (result.canceled || !result.assets?.[0]) return;
     setUploading(slotKey);
     try {
-      const url = await uploadOne(slotKey, result.assets[0], kind === "photo" ? "photos" : "documents");
-      if (kind === "photo") setPhotos((p) => ({ ...p, [slotKey]: url }));
-      else                  setDocs((d) => ({ ...d, [slotKey]: url }));
+      const prefix =
+        kind === "document" ? "documents"
+        : kind === "damage" ? "damages"
+        : kind === "other"  ? "other"
+        : "photos";
+      const url = await uploadOne(slotKey, result.assets[0], prefix);
+      if (kind === "photo")    setPhotos((p) => ({ ...p, [slotKey]: url }));
+      else if (kind === "document") setDocs((d) => ({ ...d, [slotKey]: url }));
+      else if (kind === "other")    setOtherPhotos((arr) => [...arr, url]);
+      else if (kind === "damage") {
+        setDamages((d) => ({
+          ...d,
+          [slotKey]: { ...(d[slotKey] ?? { level: "cosmetic", description: "" }), photoUrl: url },
+        }));
+      }
     } catch (e) {
       Alert.alert("Upload failed", (e as Error).message ?? "Unknown error");
     } finally {
@@ -173,9 +202,19 @@ export function InspectionWizardScreen({
     }
   };
 
+  const removeOtherPhoto = (i: number) =>
+    setOtherPhotos((arr) => arr.filter((_, idx) => idx !== i));
+
   // ---- Damage editor ------------------------------------------------
   const setDamage = (panel: string, level: DamageLevel, description?: string) => {
-    setDamages((d) => ({ ...d, [panel]: { level, description: description ?? d[panel]?.description ?? "" } }));
+    setDamages((d) => ({
+      ...d,
+      [panel]: {
+        level,
+        description: description ?? d[panel]?.description ?? "",
+        photoUrl:    d[panel]?.photoUrl,
+      },
+    }));
   };
 
   // ---- Submit -------------------------------------------------------
@@ -223,7 +262,7 @@ export function InspectionWizardScreen({
       }
       if (!vehicleId) throw new Error("Couldn't create vehicle");
 
-      // Photos
+      // Required + interior + engine photos
       const photoRows = Object.entries(photos).map(([slot, url], i) => ({
         vehicle_id: vehicleId!,
         url,
@@ -231,6 +270,7 @@ export function InspectionWizardScreen({
         sort_order: i,
         caption:    PHOTO_SLOTS.find((s) => s.key === slot)?.label ?? slot,
       }));
+
       const docRows = Object.entries(docs).map(([slot, url]) => ({
         vehicle_id: vehicleId!,
         url,
@@ -238,12 +278,22 @@ export function InspectionWizardScreen({
         sort_order: 100,
         caption:    DOC_SLOTS.find((s) => s.key === slot)?.label ?? slot,
       }));
-      if (photoRows.length + docRows.length > 0) {
-        const { error } = await supabase.from("vehicle_photos").insert([...photoRows, ...docRows]);
+
+      // Additional photos — anything noteworthy beyond the 12 required shots.
+      const otherRows = otherPhotos.map((url, i) => ({
+        vehicle_id: vehicleId!,
+        url,
+        category: "other",
+        sort_order: 200 + i,
+        caption:  `Additional photo ${i + 1}`,
+      }));
+
+      if (photoRows.length + docRows.length + otherRows.length > 0) {
+        const { error } = await supabase.from("vehicle_photos").insert([...photoRows, ...docRows, ...otherRows]);
         if (error) throw error;
       }
 
-      // Damages
+      // Damages — now carry photo_url straight onto the vehicle_damages row.
       const damageRows = Object.entries(damages)
         .filter(([, d]) => d.level !== "none")
         .map(([panel, d]) => ({
@@ -251,6 +301,7 @@ export function InspectionWizardScreen({
           location: panel,
           description: d.description || `${d.level} damage on ${panel}`,
           severity: d.level === "none" ? "cosmetic" : d.level,
+          photo_url: d.photoUrl ?? null,
         }));
       if (damageRows.length > 0) {
         const { error } = await supabase.from("vehicle_damages").insert(damageRows);
@@ -272,6 +323,8 @@ export function InspectionWizardScreen({
   const currentStep = STEPS.find((s) => s.n === step)!;
   const photoProgress = Object.keys(photos).length / PHOTO_SLOTS.length;
   const docProgress   = Object.keys(docs).length / DOC_SLOTS.length;
+  const damagedPanelsWithoutPhoto = Object.entries(damages)
+    .filter(([, d]) => d.level !== "none" && !d.photoUrl).length;
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.bg }}>
@@ -339,12 +392,66 @@ export function InspectionWizardScreen({
                 </Pressable>
               ))}
             </View>
+
+            {/* Additional photos — anything noteworthy beyond the 12 required */}
+            <View style={styles.divider} />
+            <View style={styles.subHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.subTitle}>Additional photos</Text>
+                <Text style={styles.subTip}>Custom mods, special features, extra damage angles. Up to {MAX_OTHER_PHOTOS}.</Text>
+              </View>
+              <View style={styles.countPill}>
+                <Text style={styles.countPillText}>{otherPhotos.length} / {MAX_OTHER_PHOTOS}</Text>
+              </View>
+            </View>
+
+            {otherPhotos.length < MAX_OTHER_PHOTOS && !readOnly && (
+              <Pressable
+                onPress={() => takePhoto(`other-${Date.now()}`, "other")}
+                disabled={uploading !== null}
+                style={({ pressed }) => [styles.addPhotoBtn, pressed && { opacity: 0.92 }]}
+              >
+                <Ionicons name="add-circle-outline" size={20} color={theme.colors.brand} />
+                <Text style={styles.addPhotoText}>Add Photo</Text>
+                {uploading?.startsWith("other-") && (
+                  <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginLeft: 6 }} />
+                )}
+              </Pressable>
+            )}
+
+            {otherPhotos.length > 0 && (
+              <View style={[styles.photoGrid, { marginTop: 12 }]}>
+                {otherPhotos.map((url, i) => (
+                  <View key={`${url}-${i}`} style={[styles.photoTile, styles.photoTileDone]}>
+                    <Image source={{ uri: url }} style={StyleSheet.absoluteFill} contentFit="cover" />
+                    {!readOnly && (
+                      <Pressable
+                        onPress={() => removeOtherPhoto(i)}
+                        hitSlop={6}
+                        style={styles.removeBtn}
+                      >
+                        <Ionicons name="close" size={14} color={theme.colors.white} />
+                      </Pressable>
+                    )}
+                  </View>
+                ))}
+              </View>
+            )}
           </View>
         )}
 
         {step === 3 && (
           <View>
             <Text style={styles.tip}>Walk around the car and tag every panel that has damage.</Text>
+
+            {damagedPanelsWithoutPhoto > 0 && (
+              <View style={styles.warnBanner}>
+                <Ionicons name="camera-outline" size={16} color={theme.colors.warning} />
+                <Text style={styles.warnText}>
+                  {damagedPanelsWithoutPhoto} damaged panel{damagedPanelsWithoutPhoto === 1 ? "" : "s"} still need a photo.
+                </Text>
+              </View>
+            )}
 
             {/* Simple ASCII car outline — orientation aid for the inspector. */}
             <View style={styles.carOutline}>
@@ -380,6 +487,7 @@ export function InspectionWizardScreen({
                   {sec.panels.map((p) => {
                     const d = damages[p];
                     const level = d?.level ?? "none";
+                    const damaged = level !== "none";
                     const sev = damageStyle(level);
                     return (
                       <Pressable
@@ -394,6 +502,31 @@ export function InspectionWizardScreen({
                         <View style={[styles.severityTag, { backgroundColor: sev.bg }]}>
                           <Text style={[styles.severityText, { color: sev.fg }]}>{level}</Text>
                         </View>
+                        {damaged && !readOnly && (
+                          <Pressable
+                            onPress={() => takePhoto(p, "damage")}
+                            disabled={uploading !== null}
+                            hitSlop={6}
+                            style={({ pressed }) => [
+                              styles.damagePhotoBtn,
+                              d?.photoUrl && styles.damagePhotoBtnDone,
+                              pressed && { opacity: 0.85 },
+                            ]}
+                          >
+                            {d?.photoUrl ? (
+                              <Image source={{ uri: d.photoUrl }} style={styles.damageThumb} contentFit="cover" />
+                            ) : uploading === p ? (
+                              <ActivityIndicator size="small" color={theme.colors.brand} />
+                            ) : (
+                              <Ionicons name="camera" size={18} color={theme.colors.brand} />
+                            )}
+                          </Pressable>
+                        )}
+                        {damaged && readOnly && d?.photoUrl && (
+                          <View style={[styles.damagePhotoBtn, styles.damagePhotoBtnDone]}>
+                            <Image source={{ uri: d.photoUrl }} style={styles.damageThumb} contentFit="cover" />
+                          </View>
+                        )}
                       </Pressable>
                     );
                   })}
@@ -405,6 +538,14 @@ export function InspectionWizardScreen({
               open={!!pickerOpen}
               panel={pickerOpen?.panel ?? ""}
               initial={pickerOpen ? (damages[pickerOpen.panel] ?? { level: "none", description: "" }) : { level: "none", description: "" }}
+              hasPhoto={!!(pickerOpen && damages[pickerOpen.panel]?.photoUrl)}
+              onTakePhoto={() => {
+                if (pickerOpen) {
+                  setPickerOpen(null);
+                  // Defer the camera launch so the modal can dismiss cleanly.
+                  setTimeout(() => takePhoto(pickerOpen.panel, "damage"), 250);
+                }
+              }}
               onClose={() => setPickerOpen(null)}
               onSave={(level, desc) => {
                 if (pickerOpen) setDamage(pickerOpen.panel, level, desc);
@@ -457,10 +598,20 @@ export function InspectionWizardScreen({
             </Card>
 
             <View style={styles.summaryRow}>
-              <SummaryCard icon="camera-outline" value={`${Object.keys(photos).length}/${PHOTO_SLOTS.length}`} label="Photos" complete={Object.keys(photos).length === PHOTO_SLOTS.length} />
-              <SummaryCard icon="warning-outline" value={String(Object.values(damages).filter((d) => d.level !== "none").length)} label="Damages" />
-              <SummaryCard icon="folder-open-outline" value={`${Object.keys(docs).length}/${DOC_SLOTS.length}`} label="Documents" complete={Object.keys(docs).length === DOC_SLOTS.length} />
+              <SummaryCard icon="camera-outline"      value={`${Object.keys(photos).length}/${PHOTO_SLOTS.length}`} label="Photos"    complete={Object.keys(photos).length === PHOTO_SLOTS.length} />
+              <SummaryCard icon="images-outline"      value={String(otherPhotos.length)}                            label="Other" />
+              <SummaryCard icon="warning-outline"     value={String(Object.values(damages).filter((d) => d.level !== "none").length)} label="Damages" />
+              <SummaryCard icon="folder-open-outline" value={`${Object.keys(docs).length}/${DOC_SLOTS.length}`}     label="Docs"      complete={Object.keys(docs).length === DOC_SLOTS.length} />
             </View>
+
+            {damagedPanelsWithoutPhoto > 0 && (
+              <View style={[styles.warnBanner, { marginTop: 16 }]}>
+                <Ionicons name="alert-circle-outline" size={16} color={theme.colors.warning} />
+                <Text style={styles.warnText}>
+                  {damagedPanelsWithoutPhoto} damaged panel{damagedPanelsWithoutPhoto === 1 ? "" : "s"} missing a photo. You can still submit, but buyers see only the severity tag.
+                </Text>
+              </View>
+            )}
 
             {!readOnly && (
               <Pressable onPress={submit} disabled={submitting} style={({ pressed }) => [styles.submitShadow, pressed && { opacity: 0.92 }]}>
@@ -569,13 +720,15 @@ function damageStyle(level: DamageLevel) {
 }
 
 function DamagePicker({
-  open, panel, initial, onClose, onSave,
+  open, panel, initial, hasPhoto, onClose, onSave, onTakePhoto,
 }: {
   open: boolean;
   panel: string;
   initial: { level: DamageLevel; description: string };
+  hasPhoto: boolean;
   onClose: () => void;
   onSave: (level: DamageLevel, description: string) => void;
+  onTakePhoto: () => void;
 }) {
   const [level, setLevel] = useState<DamageLevel>(initial.level);
   const [desc, setDesc] = useState(initial.description);
@@ -612,6 +765,18 @@ function DamagePicker({
             placeholderTextColor={theme.colors.textLight}
             style={[styles.input, { height: 80, paddingTop: 10, textAlignVertical: "top" }]}
           />
+
+          {level !== "none" && (
+            <Pressable
+              onPress={onTakePhoto}
+              style={({ pressed }) => [styles.modalPhotoBtn, pressed && { opacity: 0.92 }]}
+            >
+              <Ionicons name={hasPhoto ? "camera" : "camera-outline"} size={18} color={theme.colors.brand} />
+              <Text style={styles.modalPhotoText}>
+                {hasPhoto ? "Retake damage photo" : "Take damage photo"}
+              </Text>
+            </Pressable>
+          )}
 
           <View style={{ flexDirection: "row", gap: 10, marginTop: 14 }}>
             <Button label="Cancel" variant="outline" onPress={onClose} style={{ flex: 1 }} />
@@ -667,6 +832,37 @@ const styles = StyleSheet.create({
   photoEmpty: { alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
   photoLabel: { fontSize: 10, fontWeight: "600", color: theme.colors.textMuted, marginTop: 6, textAlign: "center" },
   photoOverlay: { position: "absolute", top: 6, right: 6, backgroundColor: theme.colors.success, width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  removeBtn: {
+    position: "absolute", top: 4, right: 4,
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: "rgba(217, 45, 32, 0.95)",
+    alignItems: "center", justifyContent: "center",
+    shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 2, shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+
+  // "Other" sub-section
+  divider: { height: 1, backgroundColor: theme.colors.border, marginVertical: 22 },
+  subHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
+  subTitle:  { fontSize: 14, fontWeight: "800", color: theme.colors.text },
+  subTip:    { fontSize: 11, color: theme.colors.textLight, marginTop: 2 },
+  countPill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: theme.radius.full, backgroundColor: theme.colors.brandLight },
+  countPillText: { fontSize: 11, fontWeight: "800", color: theme.colors.brand },
+  addPhotoBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    height: 50, borderRadius: theme.radius.lg,
+    borderWidth: 1, borderColor: theme.colors.brand, borderStyle: "dashed",
+    backgroundColor: theme.colors.brandLight,
+  },
+  addPhotoText: { color: theme.colors.brand, fontWeight: "800", fontSize: 14 },
+
+  // Damage warning banner
+  warnBanner: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    padding: 12, borderRadius: theme.radius.lg, marginBottom: 14,
+    backgroundColor: theme.colors.warningBg, borderWidth: 1, borderColor: "#fedf89",
+  },
+  warnText: { color: theme.colors.warning, fontSize: 12, fontWeight: "700", flex: 1 },
 
   // Car outline
   carOutline: { padding: 12, backgroundColor: theme.colors.bgAlt, borderRadius: theme.radius.lg, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 16, alignItems: "center" },
@@ -682,19 +878,37 @@ const styles = StyleSheet.create({
   panelGroupTitle: { fontSize: 12, fontWeight: "800", color: theme.colors.text, textTransform: "uppercase", letterSpacing: 0.5 },
   panelGroupBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: theme.radius.full, backgroundColor: theme.colors.warningBg },
   panelGroupBadgeText: { fontSize: 10, color: theme.colors.warning, fontWeight: "800", textTransform: "uppercase" },
-  panelRow: { flexDirection: "row", alignItems: "center", padding: 14, backgroundColor: theme.colors.white, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.lg, marginBottom: 8 },
+  panelRow: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    padding: 14, backgroundColor: theme.colors.white,
+    borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.lg,
+    marginBottom: 8,
+  },
   panelName: { fontSize: 14, fontWeight: "700", color: theme.colors.text },
   panelDesc: { fontSize: 11, color: theme.colors.textLight, marginTop: 2 },
   severityTag: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: theme.radius.full },
   severityText: { fontSize: 10, fontWeight: "800", textTransform: "uppercase" },
+
+  damagePhotoBtn: {
+    width: 44, height: 44, borderRadius: 10,
+    backgroundColor: theme.colors.brandLight,
+    borderWidth: 1, borderColor: theme.colors.brand, borderStyle: "dashed",
+    alignItems: "center", justifyContent: "center",
+    overflow: "hidden",
+  },
+  damagePhotoBtnDone: {
+    borderStyle: "solid",
+    borderColor: theme.colors.success,
+  },
+  damageThumb: { width: "100%", height: "100%" },
 
   // Review step
   reviewEyebrow: { fontSize: 10, fontWeight: "800", color: theme.colors.textLight, textTransform: "uppercase", letterSpacing: 0.5 },
   reviewTitle: { fontSize: 20, fontWeight: "800", color: theme.colors.text, marginTop: 4 },
   reviewSub: { fontSize: 12, color: theme.colors.textLight, marginTop: 4 },
   summaryRow: { flexDirection: "row", gap: 8, marginTop: 12 },
-  summaryItem: { flex: 1, padding: 14, alignItems: "center", borderRadius: theme.radius.lg, backgroundColor: theme.colors.white, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
-  summaryNum: { fontSize: 20, fontWeight: "800", color: theme.colors.text, marginTop: 4 },
+  summaryItem: { flex: 1, padding: 12, alignItems: "center", borderRadius: theme.radius.lg, backgroundColor: theme.colors.white, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  summaryNum: { fontSize: 18, fontWeight: "800", color: theme.colors.text, marginTop: 4 },
   summaryLabel: { fontSize: 10, color: theme.colors.textLight, marginTop: 2, textTransform: "uppercase", fontWeight: "700", letterSpacing: 0.4 },
   submitShadow: { marginTop: 20, borderRadius: theme.radius.lg, shadowColor: theme.colors.brand, shadowOpacity: 0.3, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
   submitBtn: { height: 54, borderRadius: theme.radius.lg, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 10 },
@@ -711,4 +925,11 @@ const styles = StyleSheet.create({
   levelRow: { flexDirection: "row", gap: 6, marginVertical: 14, flexWrap: "wrap" },
   levelBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: theme.radius.full },
   levelText: { fontSize: 12, fontWeight: "800", textTransform: "uppercase" },
+  modalPhotoBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    marginTop: 14, height: 46, borderRadius: theme.radius.lg,
+    borderWidth: 1, borderColor: theme.colors.brand, borderStyle: "dashed",
+    backgroundColor: theme.colors.brandLight,
+  },
+  modalPhotoText: { color: theme.colors.brand, fontWeight: "800", fontSize: 14 },
 });
