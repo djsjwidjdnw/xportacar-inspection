@@ -71,6 +71,8 @@ const STORAGE_BUCKET = "vehicle-photos";
 
 type UploadKind = "photo" | "document" | "other" | "damage";
 
+interface CapturedPhoto { local: string; remote: string | null }
+
 // ---- Component ------------------------------------------------------
 
 export function InspectionWizardScreen({
@@ -98,9 +100,12 @@ export function InspectionWizardScreen({
   const [sellerName, setSellerName] = useState("");
   const [sellerPhone, setSellerPhone] = useState("");
 
-  // Photo state — record of slot key -> uploaded URL
-  const [photos, setPhotos] = useState<Record<string, string>>({});
-  const [otherPhotos, setOtherPhotos] = useState<string[]>([]);
+  // Photo state — record of slot key -> { local URI from camera (shown
+  // instantly), remote public URL after Storage upload (used on submit).
+  // Decoupling the two means the thumbnail appears the moment the picker
+  // returns even if the network upload is slow or fails.
+  const [photos, setPhotos] = useState<Record<string, CapturedPhoto>>({});
+  const [otherPhotos, setOtherPhotos] = useState<CapturedPhoto[]>([]);
   const [uploading, setUploading] = useState<string | null>(null);
 
   // Damage state — record of panel name -> { level, description, photoUrl? }
@@ -167,6 +172,7 @@ export function InspectionWizardScreen({
 
   const takePhoto = async (slotKey: string, kind: UploadKind) => {
     if (readOnly) return;
+    console.log(`[InspectionWizard] takePhoto: slot=${slotKey} kind=${kind}`);
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) {
       Alert.alert("Camera disabled", "Grant camera access in Settings to capture photos.");
@@ -177,7 +183,35 @@ export function InspectionWizardScreen({
       quality: 0.7,
       allowsEditing: false,
     });
-    if (result.canceled || !result.assets?.[0]) return;
+    if (result.canceled || !result.assets?.[0]) {
+      console.log(`[InspectionWizard] takePhoto: cancelled for slot=${slotKey}`);
+      return;
+    }
+    const asset = result.assets[0];
+    const localUri = asset.uri;
+    console.log(`[InspectionWizard] takePhoto: got local URI for ${slotKey}: ${localUri.slice(0, 60)}…`);
+
+    // STEP 1 — push the local URI into state immediately so the slot shows
+    // the captured thumbnail before the upload completes (or even if it
+    // fails). This was the bug: the slot stayed empty when upload was slow
+    // or silently failed against Storage RLS.
+    if (kind === "photo") {
+      setPhotos((p) => ({ ...p, [slotKey]: { local: localUri, remote: null } }));
+    } else if (kind === "other") {
+      setOtherPhotos((arr) => [...arr, { local: localUri, remote: null }]);
+    } else if (kind === "damage") {
+      setDamages((d) => ({
+        ...d,
+        [slotKey]: { ...(d[slotKey] ?? { level: "cosmetic", description: "" }), photoUrl: localUri },
+      }));
+    } else if (kind === "document") {
+      setDocs((d) => ({ ...d, [slotKey]: localUri }));
+    }
+    // Track the array index for "other" so the upload can patch the right
+    // entry — we appended just above so it's the current array length - 1.
+    const otherIndex = kind === "other" ? otherPhotos.length : -1;
+
+    // STEP 2 — upload to Storage and patch the remote URL when it lands.
     setUploading(slotKey);
     try {
       const prefix =
@@ -185,18 +219,24 @@ export function InspectionWizardScreen({
         : kind === "damage" ? "damages"
         : kind === "other"  ? "other"
         : "photos";
-      const url = await uploadOne(slotKey, result.assets[0], prefix);
-      if (kind === "photo")    setPhotos((p) => ({ ...p, [slotKey]: url }));
-      else if (kind === "document") setDocs((d) => ({ ...d, [slotKey]: url }));
-      else if (kind === "other")    setOtherPhotos((arr) => [...arr, url]);
-      else if (kind === "damage") {
+      const url = await uploadOne(slotKey, asset, prefix);
+      console.log(`[InspectionWizard] takePhoto: upload OK for ${slotKey}: ${url.slice(0, 60)}…`);
+      if (kind === "photo") {
+        setPhotos((p) => ({ ...p, [slotKey]: { local: localUri, remote: url } }));
+      } else if (kind === "document") {
+        setDocs((d) => ({ ...d, [slotKey]: url }));
+      } else if (kind === "other") {
+        setOtherPhotos((arr) => arr.map((entry, i) => i === otherIndex ? { local: entry.local, remote: url } : entry));
+      } else if (kind === "damage") {
         setDamages((d) => ({
           ...d,
           [slotKey]: { ...(d[slotKey] ?? { level: "cosmetic", description: "" }), photoUrl: url },
         }));
       }
     } catch (e) {
-      Alert.alert("Upload failed", (e as Error).message ?? "Unknown error");
+      const msg = (e as Error).message ?? "Unknown error";
+      console.warn(`[InspectionWizard] takePhoto: upload FAILED for ${slotKey}: ${msg}`);
+      Alert.alert("Upload failed", `${msg}\n\nThe photo is still on your device — try again or submit later.`);
     } finally {
       setUploading(null);
     }
@@ -262,14 +302,18 @@ export function InspectionWizardScreen({
       }
       if (!vehicleId) throw new Error("Couldn't create vehicle");
 
-      // Required + interior + engine photos
-      const photoRows = Object.entries(photos).map(([slot, url], i) => ({
-        vehicle_id: vehicleId!,
-        url,
-        category:   slot.startsWith("interior") ? "interior" : slot === "engine" ? "engine" : slot === "trunk" ? "interior" : "exterior",
-        sort_order: i,
-        caption:    PHOTO_SLOTS.find((s) => s.key === slot)?.label ?? slot,
-      }));
+      // Required + interior + engine photos — only ones that finished
+      // uploading to Storage make it into the DB; locally-only photos are
+      // skipped (the inspector can re-take or re-submit).
+      const photoRows = Object.entries(photos)
+        .filter(([, p]) => !!p.remote)
+        .map(([slot, p], i) => ({
+          vehicle_id: vehicleId!,
+          url: p.remote!,
+          category:   slot.startsWith("interior") ? "interior" : slot === "engine" ? "engine" : slot === "trunk" ? "interior" : "exterior",
+          sort_order: i,
+          caption:    PHOTO_SLOTS.find((s) => s.key === slot)?.label ?? slot,
+        }));
 
       const docRows = Object.entries(docs).map(([slot, url]) => ({
         vehicle_id: vehicleId!,
@@ -280,13 +324,15 @@ export function InspectionWizardScreen({
       }));
 
       // Additional photos — anything noteworthy beyond the 12 required shots.
-      const otherRows = otherPhotos.map((url, i) => ({
-        vehicle_id: vehicleId!,
-        url,
-        category: "other",
-        sort_order: 200 + i,
-        caption:  `Additional photo ${i + 1}`,
-      }));
+      const otherRows = otherPhotos
+        .filter((p) => !!p.remote)
+        .map((p, i) => ({
+          vehicle_id: vehicleId!,
+          url: p.remote!,
+          category: "other",
+          sort_order: 200 + i,
+          caption:  `Additional photo ${i + 1}`,
+        }));
 
       if (photoRows.length + docRows.length + otherRows.length > 0) {
         const { error } = await supabase.from("vehicle_photos").insert([...photoRows, ...docRows, ...otherRows]);
@@ -379,8 +425,14 @@ export function InspectionWizardScreen({
                 >
                   {photos[s.key] ? (
                     <>
-                      <Image source={{ uri: photos[s.key] }} style={StyleSheet.absoluteFill} contentFit="cover" />
-                      <View style={styles.photoOverlay}><Ionicons name="checkmark" size={14} color={theme.colors.white} /></View>
+                      <Image source={{ uri: photos[s.key].local }} style={StyleSheet.absoluteFill} contentFit="cover" />
+                      <View style={styles.photoOverlay}>
+                        <Ionicons
+                          name={photos[s.key].remote ? "checkmark" : "cloud-upload-outline"}
+                          size={14}
+                          color={theme.colors.white}
+                        />
+                      </View>
                     </>
                   ) : (
                     <View style={styles.photoEmpty}>
@@ -391,6 +443,18 @@ export function InspectionWizardScreen({
                   )}
                 </Pressable>
               ))}
+            </View>
+
+            {/* DEBUG MARKER — confirms the JSX after the 12-slot grid is
+                actually mounting on-device. Remove once the Additional
+                Photos section is verified visible on the phone. */}
+            <View style={{ height: 100, backgroundColor: "#ff0000", marginTop: 16, alignItems: "center", justifyContent: "center", borderRadius: 8 }}>
+              <Text style={{ color: "#ffffff", fontSize: 20, fontWeight: "900", letterSpacing: 1 }}>
+                OTHER PHOTOS SECTION
+              </Text>
+              <Text style={{ color: "#ffffff", fontSize: 12, fontWeight: "700", marginTop: 4 }}>
+                debug marker · scroll down for upload UI
+              </Text>
             </View>
 
             {/* Additional photos — anything noteworthy beyond the 12 required */}
@@ -421,9 +485,16 @@ export function InspectionWizardScreen({
 
             {otherPhotos.length > 0 && (
               <View style={[styles.photoGrid, { marginTop: 12 }]}>
-                {otherPhotos.map((url, i) => (
-                  <View key={`${url}-${i}`} style={[styles.photoTile, styles.photoTileDone]}>
-                    <Image source={{ uri: url }} style={StyleSheet.absoluteFill} contentFit="cover" />
+                {otherPhotos.map((entry, i) => (
+                  <View key={`${entry.local}-${i}`} style={[styles.photoTile, styles.photoTileDone]}>
+                    <Image source={{ uri: entry.local }} style={StyleSheet.absoluteFill} contentFit="cover" />
+                    <View style={styles.photoOverlay}>
+                      <Ionicons
+                        name={entry.remote ? "checkmark" : "cloud-upload-outline"}
+                        size={14}
+                        color={theme.colors.white}
+                      />
+                    </View>
                     {!readOnly && (
                       <Pressable
                         onPress={() => removeOtherPhoto(i)}
