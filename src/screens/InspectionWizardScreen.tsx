@@ -99,6 +99,11 @@ export function InspectionWizardScreen({
   const [city, setCity] = useState("Dubai");
   const [sellerName, setSellerName] = useState("");
   const [sellerPhone, setSellerPhone] = useState("");
+  // Auction pricing — captured here so the admin sees the inspector's
+  // recommendation when reviewing the vehicle.  Both are EUR; reserve is
+  // optional (admin may set it later).
+  const [startingPrice, setStartingPrice] = useState("");
+  const [reservePrice,  setReservePrice]  = useState("");
 
   // Photo state — record of slot key -> { local URI from camera (shown
   // instantly), remote public URL after Storage upload (used on submit).
@@ -134,6 +139,8 @@ export function InspectionWizardScreen({
         setMileage(String(v.mileage_km ?? ""));
         setColor(v.exterior_color ?? "");
         setCity(v.location_city ?? "Dubai");
+        setStartingPrice(v.listed_price_eur != null ? String(v.listed_price_eur) : "");
+        setReservePrice(v.reserve_price_eur != null ? String(v.reserve_price_eur) : "");
       }
       setLoading(false);
     })();
@@ -265,6 +272,16 @@ export function InspectionWizardScreen({
       setStep(1);
       return;
     }
+    if (!startingPrice || Number(startingPrice) <= 0) {
+      Alert.alert("Starting price required", "Enter a starting price for the auction.");
+      setStep(1);
+      return;
+    }
+    if (reservePrice && Number(reservePrice) < Number(startingPrice)) {
+      Alert.alert("Reserve too low", "Reserve price cannot be below the starting price.");
+      setStep(1);
+      return;
+    }
     setSubmitting(true);
     try {
       let vehicleId = vehicle.id;
@@ -286,6 +303,8 @@ export function InspectionWizardScreen({
         seller_phone: sellerPhone || vehicle.seller_phone || "+971-",
         inspector_id: user.id,
         inspection_date: new Date().toISOString(),
+        listed_price_eur: Number(startingPrice) || 0,
+        reserve_price_eur: reservePrice ? Number(reservePrice) : null,
       };
 
       if (vehicleId) {
@@ -404,6 +423,40 @@ export function InspectionWizardScreen({
               <Field label="Seller name" style={{ flex: 1 }}><TextInput value={sellerName} onChangeText={setSellerName} style={styles.input} editable={!readOnly} placeholder="Ahmed Al Rashid" placeholderTextColor={theme.colors.textLight} /></Field>
               <Field label="Seller phone" style={{ flex: 1 }}><TextInput value={sellerPhone} onChangeText={setSellerPhone} keyboardType="phone-pad" style={styles.input} editable={!readOnly} placeholder="+971 50 …" placeholderTextColor={theme.colors.textLight} /></Field>
             </View>
+
+            {/* Pricing — sent to the admin panel with the rest of the
+                inspection. Admin can still override either value. */}
+            <View style={styles.priceHeader}>
+              <Ionicons name="pricetag-outline" size={14} color={theme.colors.brand} />
+              <Text style={styles.priceHeaderText}>Auction pricing</Text>
+            </View>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <Field label="Starting price (EUR)" required style={{ flex: 1 }}>
+                <TextInput
+                  value={startingPrice}
+                  onChangeText={(v) => setStartingPrice(v.replace(/[^0-9]/g, ""))}
+                  keyboardType="number-pad"
+                  style={styles.input}
+                  editable={!readOnly}
+                  placeholder="35000"
+                  placeholderTextColor={theme.colors.textLight}
+                />
+              </Field>
+              <Field label="Reserve price (EUR)" style={{ flex: 1 }}>
+                <TextInput
+                  value={reservePrice}
+                  onChangeText={(v) => setReservePrice(v.replace(/[^0-9]/g, ""))}
+                  keyboardType="number-pad"
+                  style={styles.input}
+                  editable={!readOnly}
+                  placeholder="optional"
+                  placeholderTextColor={theme.colors.textLight}
+                />
+              </Field>
+            </View>
+            <Text style={styles.priceHint}>
+              Starting price kicks off the auction. Reserve is the lowest the seller will accept — admin can still override either.
+            </Text>
           </Card>
         )}
 
@@ -666,6 +719,21 @@ export function InspectionWizardScreen({
               <Text style={styles.reviewEyebrow}>Vehicle</Text>
               <Text style={styles.reviewTitle}>{year || "—"} {make || "—"} {model || "—"}</Text>
               <Text style={styles.reviewSub}>VIN {vin || "—"} · {formatKm(Number(mileage) || 0)} · {color || "—"}</Text>
+
+              {startingPrice && (
+                <View style={styles.reviewPriceRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.reviewPriceLabel}>Starting price</Text>
+                    <Text style={styles.reviewPriceValue}>€{Number(startingPrice).toLocaleString("en-GB")}</Text>
+                  </View>
+                  {reservePrice && (
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.reviewPriceLabel}>Reserve</Text>
+                      <Text style={styles.reviewPriceValue}>€{Number(reservePrice).toLocaleString("en-GB")}</Text>
+                    </View>
+                  )}
+                </View>
+              )}
             </Card>
 
             <View style={styles.summaryRow}>
@@ -891,6 +959,9 @@ const styles = StyleSheet.create({
   // Forms
   label: { fontSize: 11, fontWeight: "800", color: theme.colors.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 },
   input: { height: 46, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.border, paddingHorizontal: 14, fontSize: 14, color: theme.colors.text, backgroundColor: theme.colors.white },
+  priceHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8, marginBottom: 8 },
+  priceHeaderText: { fontSize: 12, fontWeight: "800", color: theme.colors.brand, textTransform: "uppercase", letterSpacing: 0.5 },
+  priceHint: { fontSize: 11, color: theme.colors.textLight, lineHeight: 16, marginTop: 4 },
 
   // Photo grid
   photoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
@@ -977,6 +1048,9 @@ const styles = StyleSheet.create({
   reviewEyebrow: { fontSize: 10, fontWeight: "800", color: theme.colors.textLight, textTransform: "uppercase", letterSpacing: 0.5 },
   reviewTitle: { fontSize: 20, fontWeight: "800", color: theme.colors.text, marginTop: 4 },
   reviewSub: { fontSize: 12, color: theme.colors.textLight, marginTop: 4 },
+  reviewPriceRow: { flexDirection: "row", marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: theme.colors.border, gap: 12 },
+  reviewPriceLabel: { fontSize: 10, fontWeight: "800", color: theme.colors.textLight, textTransform: "uppercase", letterSpacing: 0.4 },
+  reviewPriceValue: { fontSize: 16, fontWeight: "800", color: theme.colors.brand, marginTop: 4 },
   summaryRow: { flexDirection: "row", gap: 8, marginTop: 12 },
   summaryItem: { flex: 1, padding: 12, alignItems: "center", borderRadius: theme.radius.lg, backgroundColor: theme.colors.white, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
   summaryNum: { fontSize: 18, fontWeight: "800", color: theme.colors.text, marginTop: 4 },
