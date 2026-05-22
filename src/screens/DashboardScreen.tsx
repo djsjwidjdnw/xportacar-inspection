@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { Button } from "../components/Button";
 import { Spinner } from "../components/Spinner";
@@ -10,6 +12,17 @@ import { useAuth } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 import { theme, formatKm } from "../lib/theme";
 import type { VehicleRow } from "../lib/types";
+import {
+  INSPECTION_AUTOSAVE_PREFIX, type AutosavePayload,
+} from "./InspectionWizardScreen";
+
+interface DraftRow {
+  key: string;            // AsyncStorage key
+  vehicleId: string | null; // null = the __new__ slot
+  summary: string;        // "2023 BMW X5" or "Untitled draft"
+  step: number;
+  ts: number;
+}
 
 interface AssignedVehicle extends VehicleRow {
   inspector_id: string | null;
@@ -19,15 +32,54 @@ interface CompletedVehicle extends AssignedVehicle {
   photo_count: number;
 }
 
-type Section = { section: "assigned" } | { section: "completed" };
-const SECTIONS: Section[] = [{ section: "assigned" }, { section: "completed" }];
+type Section = { section: "drafts" } | { section: "assigned" } | { section: "completed" };
 
 export function DashboardScreen({ navigation }: { navigation: { navigate: (s: string, p?: object) => void } }) {
   const { user, signOut } = useAuth();
   const [assigned, setAssigned] = useState<AssignedVehicle[]>([]);
   const [completed, setCompleted] = useState<CompletedVehicle[]>([]);
+  const [drafts, setDrafts] = useState<DraftRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Pull every saved draft out of AsyncStorage. We scan all keys with
+  // the `xpc_inspection_draft:` prefix, parse them, and surface them
+  // sorted newest-first.
+  const loadDrafts = useCallback(async () => {
+    try {
+      const keys = await AsyncStorage.getAllKeys();
+      const draftKeys = keys.filter((k) => k.startsWith(INSPECTION_AUTOSAVE_PREFIX));
+      if (draftKeys.length === 0) { setDrafts([]); return; }
+      const pairs = await AsyncStorage.multiGet(draftKeys);
+      const rows: DraftRow[] = [];
+      for (const [key, raw] of pairs) {
+        if (!raw) continue;
+        try {
+          const data = JSON.parse(raw) as AutosavePayload;
+          if (data.v !== 1) continue;
+          // Only show drafts from this inspector (or pre-auth drafts).
+          if (data.inspectorId && user?.id && data.inspectorId !== user.id) continue;
+          // Skip empty drafts so a stale __new__ key doesn't appear.
+          if (!data.vin && !data.make && !data.model) continue;
+          rows.push({
+            key,
+            vehicleId: data.vehicleId,
+            summary: data.vehicleSummary
+              ?? (data.year && data.make && data.model ? `${data.year} ${data.make} ${data.model}` : "Untitled draft"),
+            step: data.step,
+            ts: data.ts,
+          });
+        } catch { /* corrupt — skip */ }
+      }
+      rows.sort((a, b) => b.ts - a.ts);
+      setDrafts(rows);
+    } catch { setDrafts([]); }
+  }, [user]);
+
+  const discardDraft = async (key: string) => {
+    await AsyncStorage.removeItem(key);
+    await loadDrafts();
+  };
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -55,9 +107,21 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
       ...v,
       photo_count: Array.isArray(v.vehicle_photos) ? (v.vehicle_photos[0]?.count ?? 0) : 0,
     })));
-  }, [user]);
+
+    await loadDrafts();
+  }, [user, loadDrafts]);
 
   useEffect(() => { load().finally(() => setLoading(false)); }, [load]);
+
+  // Refresh drafts every time the dashboard regains focus — the wizard
+  // writes the autosave key on every keystroke, so coming back here
+  // should always show the freshest state.
+  useFocusEffect(useCallback(() => { void loadDrafts(); }, [loadDrafts]));
+
+  // Hide the Drafts section header entirely when there's nothing to show.
+  const sections: Section[] = drafts.length > 0
+    ? [{ section: "drafts" }, { section: "assigned" }, { section: "completed" }]
+    : [{ section: "assigned" }, { section: "completed" }];
 
   if (loading) return <Spinner label="Loading inspections…" />;
 
@@ -67,7 +131,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.bg }}>
       <FlatList
-        data={SECTIONS}
+        data={sections}
         keyExtractor={(s) => s.section}
         refreshControl={
           <RefreshControl
@@ -132,21 +196,63 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
           <View style={{ marginBottom: 24 }}>
             <View style={styles.sectionHeader}>
               <Ionicons
-                name={item.section === "assigned" ? "clipboard-outline" : "checkmark-done-outline"}
+                name={
+                  item.section === "drafts"     ? "cloud-outline"
+                  : item.section === "assigned" ? "clipboard-outline"
+                  : "checkmark-done-outline"
+                }
                 size={14}
                 color={theme.colors.textLight}
               />
               <Text style={styles.sectionTitle}>
-                {item.section === "assigned" ? "Assigned to you" : "Completed inspections"}
+                {item.section === "drafts"     ? "Drafts in progress"
+                  : item.section === "assigned" ? "Assigned to you"
+                  : "Completed inspections"}
               </Text>
               <View style={styles.countPill}>
                 <Text style={styles.countPillText}>
-                  {item.section === "assigned" ? assigned.length : completed.length}
+                  {item.section === "drafts" ? drafts.length
+                    : item.section === "assigned" ? assigned.length
+                    : completed.length}
                 </Text>
               </View>
             </View>
 
-            {item.section === "assigned" ? (
+            {item.section === "drafts" ? (
+              drafts.length === 0 ? null /* hide the empty drafts header */ : (
+                drafts.map((d) => (
+                  <Pressable
+                    key={d.key}
+                    style={({ pressed }) => [styles.card, pressed && { opacity: 0.96, transform: [{ scale: 0.99 }] }]}
+                    onPress={() => navigation.navigate("Inspect", { vehicleId: d.vehicleId })}
+                  >
+                    <View style={[styles.cardIconWrap, { backgroundColor: theme.colors.warningBg }]}>
+                      <Ionicons name="document-text-outline" size={20} color={theme.colors.warning} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.cardTitle}>{d.summary}</Text>
+                      <View style={styles.cardMeta}>
+                        <Meta icon="time-outline">Last edited {formatRelative(d.ts)}</Meta>
+                        <Meta icon="layers-outline">Step {d.step}</Meta>
+                      </View>
+                    </View>
+                    <Pressable
+                      hitSlop={8}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        Alert.alert("Discard draft?", `Discard the in-progress draft for ${d.summary}?`, [
+                          { text: "Keep", style: "cancel" },
+                          { text: "Discard", style: "destructive", onPress: () => discardDraft(d.key) },
+                        ]);
+                      }}
+                      style={({ pressed }) => [styles.discardBtn, pressed && { opacity: 0.85 }]}
+                    >
+                      <Ionicons name="trash-outline" size={14} color={theme.colors.error} />
+                    </Pressable>
+                  </Pressable>
+                ))
+              )
+            ) : item.section === "assigned" ? (
               assigned.length === 0 ? (
                 <EmptyState
                   icon="clipboard-outline"
@@ -190,7 +296,9 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                 <Pressable
                   key={v.id}
                   style={({ pressed }) => [styles.card, pressed && { opacity: 0.96, transform: [{ scale: 0.99 }] }]}
-                  onPress={() => navigation.navigate("Inspect", { vehicleId: v.id, readOnly: true })}
+                  // viewMode: open read-only with an Edit button so the
+                  // inspector can review before any accidental changes.
+                  onPress={() => navigation.navigate("Inspect", { vehicleId: v.id, viewMode: true })}
                 >
                   <View style={[styles.cardIconWrap, { backgroundColor: theme.colors.successBg }]}>
                     <Ionicons name="checkmark" size={20} color={theme.colors.success} />
@@ -249,6 +357,20 @@ function greeting(): string {
   if (h < 12) return "morning";
   if (h < 18) return "afternoon";
   return "evening";
+}
+
+// "5m ago", "2h ago", "yesterday", or absolute date for older entries.
+function formatRelative(ts: number): string {
+  const ms = Date.now() - ts;
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.floor(hr / 24);
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
 const styles = StyleSheet.create({
@@ -318,4 +440,11 @@ const styles = StyleSheet.create({
   scheduledTagText: { fontSize: 10, fontWeight: "800", color: theme.colors.warning, textTransform: "uppercase", letterSpacing: 0.4 },
   doneTag:  { paddingHorizontal: 8, paddingVertical: 4, borderRadius: theme.radius.full, backgroundColor: theme.colors.successBg },
   doneTagText: { fontSize: 10, fontWeight: "800", color: theme.colors.success, textTransform: "uppercase", letterSpacing: 0.4 },
+
+  // Draft card discard chip
+  discardBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: theme.colors.errorBg,
+    alignItems: "center", justifyContent: "center",
+  },
 });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView,
+  ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView,
   StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { Image } from "expo-image";
@@ -17,25 +17,32 @@ import { theme, formatKm } from "../lib/theme";
 import { useAuth } from "../lib/auth";
 import type { VehicleRow } from "../lib/types";
 
-// Auto-save: persists wizard progress under a per-user key. Saving runs
-// after every change so the inspector can resume from a crash. We never
-// persist Storage upload URLs — only what the user typed and which
-// photos they took (by local URI). Restoration is conservative: if the
-// vehicle id matches and the timestamp is fresh (< 6h) we restore.
-const AUTOSAVE_KEY = "xpc_inspection_wizard_v1";
-const AUTOSAVE_TTL_MS = 6 * 3600_000;
+// Auto-save: persists wizard progress under a per-vehicle key so the
+// inspector can pick up multiple drafts. A "new" inspection (no
+// incomingId) lives at AUTOSAVE_KEY_NEW; existing vehicles use
+// `${AUTOSAVE_KEY_PREFIX}${vehicleId}`. Drafts older than 14d expire.
+const AUTOSAVE_KEY_PREFIX = "xpc_inspection_draft:";
+const AUTOSAVE_KEY_NEW = `${AUTOSAVE_KEY_PREFIX}__new__`;
+const AUTOSAVE_TTL_MS = 14 * 86400_000;
 
-interface AutosavePayload {
+function autosaveKeyFor(vehicleId: string | null | undefined): string {
+  return vehicleId ? `${AUTOSAVE_KEY_PREFIX}${vehicleId}` : AUTOSAVE_KEY_NEW;
+}
+
+export interface AutosavePayload {
   v: 1;
   ts: number;
   inspectorId: string | null;
   vehicleId: string | null;
+  vehicleSummary?: string; // "2023 BMW X5" etc — surfaced in the drafts list.
   step: number;
   vin: string; make: string; model: string; year: string;
   mileage: string; color: string; city: string;
   sellerName: string; sellerPhone: string;
   startingPrice: string; reservePrice: string;
 }
+
+export { autosaveKeyFor as inspectionAutosaveKeyFor, AUTOSAVE_KEY_PREFIX as INSPECTION_AUTOSAVE_PREFIX };
 
 // Resize + compress an image before upload. Max 1200px on the longest
 // side; JPEG @ 80%. Drops a 5 MB photo to ~250-400 kB which uploads
@@ -118,12 +125,19 @@ interface CapturedPhoto { local: string; remote: string | null }
 export function InspectionWizardScreen({
   route, navigation,
 }: {
-  route: { params?: { vehicleId?: string | null; readOnly?: boolean } };
+  // `viewMode` opens the screen in read-only view first (with an Edit
+  // button up top). `readOnly` keeps the existing hard-locked behavior.
+  route: { params?: { vehicleId?: string | null; readOnly?: boolean; viewMode?: boolean } };
   navigation: { goBack: () => void; navigate: (s: string) => void };
 }) {
   const { user } = useAuth();
-  const readOnly = !!route.params?.readOnly;
+  const initialViewMode = !!route.params?.viewMode;
+  const [viewMode, setViewMode] = useState(initialViewMode);
+  // readOnly = either explicitly passed OR the user hasn't tapped Edit yet.
+  const readOnly = !!route.params?.readOnly || viewMode;
   const incomingId = route.params?.vehicleId ?? null;
+  // Stable key for AsyncStorage — per-vehicle so we can keep multiple drafts.
+  const autosaveKey = autosaveKeyFor(incomingId);
 
   // Step state
   const [step, setStep] = useState(1);
@@ -187,23 +201,22 @@ export function InspectionWizardScreen({
   }, [incomingId]);
 
   // ---- Auto-save restore on mount -----------------------------------
-  // Only restores when starting a NEW inspection (no incomingId) — for
-  // existing-vehicle reviews we don't want to overwrite the DB snapshot.
+  // Restores any draft (by vehicle id, or the __new__ slot for fresh
+  // inspections). Existing vehicles also support drafts now so an
+  // inspector mid-edit doesn't lose typed changes.
   const [restoredAt, setRestoredAt] = useState<number | null>(null);
   useEffect(() => {
-    if (incomingId) return;
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(AUTOSAVE_KEY);
+        const raw = await AsyncStorage.getItem(autosaveKey);
         if (!raw) return;
         const data = JSON.parse(raw) as AutosavePayload;
         if (data.v !== 1) return;
         if (data.inspectorId && user?.id && data.inspectorId !== user.id) return;
         if (Date.now() - data.ts > AUTOSAVE_TTL_MS) {
-          await AsyncStorage.removeItem(AUTOSAVE_KEY);
+          await AsyncStorage.removeItem(autosaveKey);
           return;
         }
-        // Only restore when there's actually content to restore.
         if (!data.vin && !data.make && !data.model) return;
         setVin(data.vin); setMake(data.make); setModel(data.model); setYear(data.year);
         setMileage(data.mileage); setColor(data.color); setCity(data.city);
@@ -214,22 +227,26 @@ export function InspectionWizardScreen({
       } catch { /* corrupt payload — skip */ }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [incomingId]);
+  }, [autosaveKey]);
 
   // ---- Auto-save write on changes -----------------------------------
+  // Persists under the per-vehicle key — works for both new inspections
+  // and partial edits to existing vehicles.
   useEffect(() => {
-    if (incomingId) return; // existing vehicles: don't autosave their edits
+    if (viewMode) return; // don't write while the wizard is read-only-view
+    const summary = year && make && model ? `${year} ${make} ${model}` : undefined;
     const payload: AutosavePayload = {
       v: 1, ts: Date.now(),
       inspectorId: user?.id ?? null,
-      vehicleId: null,
+      vehicleId: incomingId,
+      vehicleSummary: summary,
       step,
       vin, make, model, year, mileage, color, city,
       sellerName, sellerPhone, startingPrice, reservePrice,
     };
-    void AsyncStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload)).catch(() => {});
+    void AsyncStorage.setItem(autosaveKey, JSON.stringify(payload)).catch(() => {});
   }, [
-    incomingId, user, step,
+    autosaveKey, viewMode, incomingId, user, step,
     vin, make, model, year, mileage, color, city,
     sellerName, sellerPhone, startingPrice, reservePrice,
   ]);
@@ -461,9 +478,14 @@ export function InspectionWizardScreen({
         if (error) throw error;
       }
 
-      // Submission succeeded — clear the autosave draft so the next
-      // inspection starts clean.
-      void AsyncStorage.removeItem(AUTOSAVE_KEY).catch(() => {});
+      // Submission succeeded — clear THIS draft (per-vehicle) so the
+      // dashboard's Drafts list doesn't keep showing it.
+      void AsyncStorage.removeItem(autosaveKey).catch(() => {});
+      if (vehicleId) {
+        // Also clear the __new__ slot in case the inspector promoted a
+        // freshly typed draft into a vehicle row.
+        void AsyncStorage.removeItem(AUTOSAVE_KEY_NEW).catch(() => {});
+      }
       Alert.alert("Inspection submitted", "Vehicle is now ready for listing.", [
         { text: "Back to dashboard", onPress: () => navigation.goBack() },
       ]);
@@ -483,10 +505,36 @@ export function InspectionWizardScreen({
     .filter(([, d]) => d.level !== "none" && !d.photoUrl).length;
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.bg }}>
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: theme.colors.bg }}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      // Stepper sits at the top + the system status bar — give the
+      // keyboard offset enough room so the price inputs don't end up
+      // pushed off-screen when the keyboard opens.
+      keyboardVerticalOffset={Platform.OS === "ios" ? 64 : 0}
+    >
       <Stepper step={step} />
 
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+      {viewMode && (
+        <View style={styles.viewBanner}>
+          <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Ionicons name="eye-outline" size={16} color={theme.colors.brand} />
+            <Text style={styles.viewBannerText}>Viewing inspection (read-only).</Text>
+          </View>
+          <Pressable
+            onPress={() => setViewMode(false)}
+            style={({ pressed }) => [styles.editBtn, pressed && { opacity: 0.92 }]}
+          >
+            <Ionicons name="create-outline" size={14} color={theme.colors.white} />
+            <Text style={styles.editBtnText}>Edit</Text>
+          </Pressable>
+        </View>
+      )}
+
+      <ScrollView
+        contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+        keyboardShouldPersistTaps="handled"
+      >
         {restoredAt && (
           <View style={styles.resumeBanner}>
             <Ionicons name="cloud-done-outline" size={16} color={theme.colors.brand} />
@@ -497,7 +545,7 @@ export function InspectionWizardScreen({
                 Alert.alert("Discard draft?", "Clear the auto-saved fields and start fresh?", [
                   { text: "Keep", style: "cancel" },
                   { text: "Discard", style: "destructive", onPress: () => {
-                    void AsyncStorage.removeItem(AUTOSAVE_KEY);
+                    void AsyncStorage.removeItem(autosaveKey);
                     setVin(""); setMake(""); setModel(""); setYear("");
                     setMileage(""); setColor(""); setCity("Dubai");
                     setSellerName(""); setSellerPhone("");
@@ -878,7 +926,7 @@ export function InspectionWizardScreen({
         <Button label="Back" variant="outline" onPress={() => step === 1 ? navigation.goBack() : setStep((s) => s - 1)} style={{ flex: 1 }} />
         {step < STEPS.length && <Button label="Next" onPress={() => setStep((s) => Math.min(STEPS.length, s + 1))} style={{ flex: 1 }} />}
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -1174,6 +1222,22 @@ const styles = StyleSheet.create({
 
   // Nav bar
   navBar: { flexDirection: "row", gap: 10, padding: 16, backgroundColor: theme.colors.white, borderTopWidth: 1, borderTopColor: theme.colors.border },
+
+  // View-mode banner (read-only with an Edit toggle)
+  viewBanner: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    paddingHorizontal: 16, paddingVertical: 10,
+    backgroundColor: theme.colors.brandLight,
+    borderBottomWidth: 1, borderBottomColor: "#b2ddff",
+  },
+  viewBannerText: { fontSize: 12, fontWeight: "700", color: theme.colors.brandDark },
+  editBtn: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.brand,
+  },
+  editBtnText: { color: theme.colors.white, fontSize: 12, fontWeight: "800" },
 
   // Modal
   modalScrim: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", padding: 16, justifyContent: "flex-end" },
