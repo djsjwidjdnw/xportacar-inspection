@@ -40,6 +40,7 @@ export interface AutosavePayload {
   mileage: string; color: string; city: string;
   sellerName: string; sellerPhone: string;
   startingPrice: string; reservePrice: string;
+  notes?: string;
 }
 
 export { autosaveKeyFor as inspectionAutosaveKeyFor, AUTOSAVE_KEY_PREFIX as INSPECTION_AUTOSAVE_PREFIX };
@@ -158,6 +159,9 @@ export function InspectionWizardScreen({
   // optional (admin may set it later).
   const [startingPrice, setStartingPrice] = useState("");
   const [reservePrice,  setReservePrice]  = useState("");
+  // Free-text inspector notes → saved to vehicles.inspection_notes so the
+  // buyer/web condition report can show them.
+  const [notes, setNotes] = useState("");
 
   // Photo state — record of slot key -> { local URI from camera (shown
   // instantly), remote public URL after Storage upload (used on submit).
@@ -195,6 +199,7 @@ export function InspectionWizardScreen({
         setCity(v.location_city ?? "Dubai");
         setStartingPrice(v.listed_price_eur != null ? String(v.listed_price_eur) : "");
         setReservePrice(v.reserve_price_eur != null ? String(v.reserve_price_eur) : "");
+        setNotes(v.inspection_notes ?? "");
       }
       setLoading(false);
     })();
@@ -222,6 +227,7 @@ export function InspectionWizardScreen({
         setMileage(data.mileage); setColor(data.color); setCity(data.city);
         setSellerName(data.sellerName); setSellerPhone(data.sellerPhone);
         setStartingPrice(data.startingPrice); setReservePrice(data.reservePrice);
+        setNotes(data.notes ?? "");
         setStep(data.step);
         setRestoredAt(data.ts);
       } catch { /* corrupt payload — skip */ }
@@ -243,12 +249,14 @@ export function InspectionWizardScreen({
       step,
       vin, make, model, year, mileage, color, city,
       sellerName, sellerPhone, startingPrice, reservePrice,
+      notes,
     };
     void AsyncStorage.setItem(autosaveKey, JSON.stringify(payload)).catch(() => {});
   }, [
     autosaveKey, viewMode, incomingId, user, step,
     vin, make, model, year, mileage, color, city,
     sellerName, sellerPhone, startingPrice, reservePrice,
+    notes,
   ]);
 
   // ---- Helpers ------------------------------------------------------
@@ -410,6 +418,7 @@ export function InspectionWizardScreen({
         inspection_date: new Date().toISOString(),
         listed_price_eur: Number(startingPrice) || 0,
         reserve_price_eur: reservePrice ? Number(reservePrice) : null,
+        inspection_notes: notes.trim() || null,
       };
 
       if (vehicleId) {
@@ -439,13 +448,17 @@ export function InspectionWizardScreen({
           caption:    PHOTO_SLOTS.find((s) => s.key === slot)?.label ?? slot,
         }));
 
-      const docRows = Object.entries(docs).map(([slot, url]) => ({
-        vehicle_id: vehicleId!,
-        url,
-        category: "documents",
-        sort_order: 100,
-        caption:    DOC_SLOTS.find((s) => s.key === slot)?.label ?? slot,
-      }));
+      // Only persist documents that finished uploading to Storage — a local
+      // file:// URI would be unreadable by the buyer/web apps.
+      const docRows = Object.entries(docs)
+        .filter(([, url]) => /^https?:\/\//.test(url))
+        .map(([slot, url]) => ({
+          vehicle_id: vehicleId!,
+          url,
+          category: "documents",
+          sort_order: 100,
+          caption:    DOC_SLOTS.find((s) => s.key === slot)?.label ?? slot,
+        }));
 
       // Additional photos — anything noteworthy beyond the 12 required shots.
       const otherRows = otherPhotos
@@ -471,7 +484,9 @@ export function InspectionWizardScreen({
           location: panel,
           description: d.description || `${d.level} damage on ${panel}`,
           severity: d.level === "none" ? "cosmetic" : d.level,
-          photo_url: d.photoUrl ?? null,
+          // Only store a remote Storage URL — a not-yet-uploaded local file://
+          // URI would be unreadable by the buyer/web condition report.
+          photo_url: d.photoUrl && /^https?:\/\//.test(d.photoUrl) ? d.photoUrl : null,
         }));
       if (damageRows.length > 0) {
         const { error } = await supabase.from("vehicle_damages").insert(damageRows);
@@ -549,7 +564,7 @@ export function InspectionWizardScreen({
                     setVin(""); setMake(""); setModel(""); setYear("");
                     setMileage(""); setColor(""); setCity("Dubai");
                     setSellerName(""); setSellerPhone("");
-                    setStartingPrice(""); setReservePrice("");
+                    setStartingPrice(""); setReservePrice(""); setNotes("");
                     setStep(1); setRestoredAt(null);
                   } },
                 ]);
@@ -902,6 +917,27 @@ export function InspectionWizardScreen({
                 </Text>
               </View>
             )}
+
+            {/* Inspector notes — saved to the vehicle so buyers see them in
+                the condition report. */}
+            <View style={[styles.card, { marginTop: 16 }]}>
+              <View style={styles.priceHeader}>
+                <Ionicons name="create-outline" size={14} color={theme.colors.brand} />
+                <Text style={styles.priceHeaderText}>Inspector notes</Text>
+              </View>
+              {readOnly ? (
+                <Text style={styles.reviewSub}>{notes.trim() || "No notes added."}</Text>
+              ) : (
+                <TextInput
+                  value={notes}
+                  onChangeText={setNotes}
+                  multiline
+                  placeholder="Overall condition, mechanical notes, anything buyers should know…"
+                  placeholderTextColor={theme.colors.textLight}
+                  style={[styles.input, { height: 96, paddingTop: 10, textAlignVertical: "top" }]}
+                />
+              )}
+            </View>
 
             {!readOnly && (
               <Pressable onPress={submit} disabled={submitting} style={({ pressed }) => [styles.submitShadow, pressed && { opacity: 0.92 }]}>

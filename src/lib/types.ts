@@ -30,6 +30,7 @@ export interface VehicleRow {
   seller_phone?: string | null;
   inspector_id?: string | null;
   inspection_date?: string | null;
+  inspection_notes?: string | null;
 }
 
 export interface AuctionRow {
