@@ -33,6 +33,11 @@ const CURRENT_YEAR = 2026;
 const DEFAULT_KM_PER_YEAR = 15_000;
 const USD_TO_EUR = 0.92;
 
+// Mobile/web-export apps have no server-side env, so the auto.dev key is
+// embedded here (intentional — it ships in the client bundle). The web app
+// uses VALUATION_API_KEY server-side instead.
+export const DEFAULT_API_KEY = "sk_ad_qp5H-dZoZCLFV2QRx4pN0_qA";
+
 // --- Reference table -------------------------------------------------
 // base = approximate EUR price of a recent (~1-year-old) example.
 interface Ref { base: number; kmPerYear?: number }
@@ -148,7 +153,7 @@ export function estimateValuation(input: ValuationInput): Valuation {
  */
 export async function fetchMarketValuation(
   input: ValuationInput,
-  apiKey: string,
+  apiKey: string = DEFAULT_API_KEY,
 ): Promise<Valuation | null> {
   if (!apiKey) return null;
   try {
@@ -190,6 +195,15 @@ export async function fetchMarketValuation(
   } catch {
     return null;
   }
+}
+
+/**
+ * Convenience: try live market data (embedded API key), fall back to the
+ * reference-table estimate. Always resolves to a Valuation — never throws.
+ */
+export async function getMarketValuation(input: ValuationInput): Promise<Valuation> {
+  const live = await fetchMarketValuation(input).catch(() => null);
+  return live ?? estimateValuation(input);
 }
 
 /** Human label for a valuation's provenance. */

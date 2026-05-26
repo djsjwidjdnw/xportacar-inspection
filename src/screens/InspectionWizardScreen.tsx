@@ -14,7 +14,7 @@ import { Button } from "../components/Button";
 import { Spinner } from "../components/Spinner";
 import { supabase } from "../lib/supabase";
 import { theme, formatKm } from "../lib/theme";
-import { estimateValuation, type Valuation } from "../lib/valuation";
+import { estimateValuation, getMarketValuation, type Valuation } from "../lib/valuation";
 import { useAuth } from "../lib/auth";
 import type { VehicleRow } from "../lib/types";
 
@@ -211,11 +211,25 @@ export function InspectionWizardScreen({
 
   // Market estimate + auto-fill. Auto-fills starting=avg / reserve=min until
   // the inspector edits a price (or for an existing vehicle with saved prices).
+  // Instant reference-table estimate, upgraded to live market data (debounced)
+  // when make/model/year are filled in.
   const [pricesTouched, setPricesTouched] = useState<boolean>(!!incomingId);
-  const marketEstimate = useMemo<Valuation | null>(() => {
+  const referenceEstimate = useMemo<Valuation | null>(() => {
     if (!make.trim() || !model.trim() || !year.trim()) return null;
     return estimateValuation({ make, model, year: Number(year), mileageKm: Number(mileage) || undefined });
   }, [make, model, year, mileage]);
+  const [liveValuation, setLiveValuation] = useState<Valuation | null>(null);
+  useEffect(() => {
+    setLiveValuation(null);
+    if (!make.trim() || !model.trim() || !year.trim()) return;
+    let on = true;
+    const id = setTimeout(() => {
+      getMarketValuation({ make, model, year: Number(year), mileageKm: Number(mileage) || undefined })
+        .then((v) => { if (on && v.source === "market_data") setLiveValuation(v); });
+    }, 600);
+    return () => { on = false; clearTimeout(id); };
+  }, [make, model, year, mileage]);
+  const marketEstimate = liveValuation ?? referenceEstimate;
   useEffect(() => {
     if (!marketEstimate || pricesTouched || readOnly) return;
     setStartingPrice(String(marketEstimate.avgEur));
