@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { Ionicons } from "@expo/vector-icons";
+import { Icon } from "../components/Icon";
 import { useFocusEffect } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -158,7 +158,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                   <Text style={styles.heroSub}>{user?.email}</Text>
                 </View>
                 <Pressable onPress={signOut} hitSlop={8} style={styles.signOutBtn}>
-                  <Ionicons name="log-out-outline" size={18} color={theme.colors.white} />
+                  <Icon name="log-out-outline" size={18} color={theme.colors.white} />
                 </Pressable>
               </View>
 
@@ -181,13 +181,13 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                 style={styles.cta}
               >
                 <View style={styles.ctaIcon}>
-                  <Ionicons name="add-circle-outline" size={22} color={theme.colors.white} />
+                  <Icon name="add-circle-outline" size={22} color={theme.colors.white} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.ctaTitle}>Start a new inspection</Text>
                   <Text style={styles.ctaSub}>Walk-in vehicle? Begin a fresh report from scratch.</Text>
                 </View>
-                <Ionicons name="chevron-forward" size={20} color={theme.colors.white} />
+                <Icon name="chevron-forward" size={20} color={theme.colors.white} />
               </LinearGradient>
             </Pressable>
           </View>
@@ -195,7 +195,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
         renderItem={({ item }) => (
           <View style={{ marginBottom: 24 }}>
             <View style={styles.sectionHeader}>
-              <Ionicons
+              <Icon
                 name={
                   item.section === "drafts"     ? "cloud-outline"
                   : item.section === "assigned" ? "clipboard-outline"
@@ -227,7 +227,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                     onPress={() => navigation.navigate("Inspect", { vehicleId: d.vehicleId })}
                   >
                     <View style={[styles.cardIconWrap, { backgroundColor: theme.colors.warningBg }]}>
-                      <Ionicons name="document-text-outline" size={20} color={theme.colors.warning} />
+                      <Icon name="document-text-outline" size={20} color={theme.colors.warning} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.cardTitle}>{d.summary}</Text>
@@ -247,7 +247,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                       }}
                       style={({ pressed }) => [styles.discardBtn, pressed && { opacity: 0.85 }]}
                     >
-                      <Ionicons name="trash-outline" size={14} color={theme.colors.error} />
+                      <Icon name="trash-outline" size={14} color={theme.colors.error} />
                     </Pressable>
                   </Pressable>
                 ))
@@ -267,7 +267,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                     onPress={() => navigation.navigate("Inspect", { vehicleId: v.id })}
                   >
                     <View style={styles.cardIconWrap}>
-                      <Ionicons name="car-sport-outline" size={20} color={theme.colors.brand} />
+                      <Icon name="car-sport-outline" size={20} color={theme.colors.brand} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.cardTitle}>{v.year} {v.make} {v.model}</Text>
@@ -301,7 +301,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                   onPress={() => navigation.navigate("Inspect", { vehicleId: v.id, viewMode: true })}
                 >
                   <View style={[styles.cardIconWrap, { backgroundColor: theme.colors.successBg }]}>
-                    <Ionicons name="checkmark" size={20} color={theme.colors.success} />
+                    <Icon name="checkmark" size={20} color={theme.colors.success} />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.cardTitle}>{v.year} {v.make} {v.model}</Text>
@@ -333,20 +333,20 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
   );
 }
 
-function Stat({ label, value, icon }: { label: string; value: number; icon: keyof typeof import("@expo/vector-icons").Ionicons.glyphMap }) {
+function Stat({ label, value, icon }: { label: string; value: number; icon: string }) {
   return (
     <View style={styles.statItem}>
-      <Ionicons name={icon} size={16} color="rgba(255,255,255,0.85)" />
+      <Icon name={icon} size={16} color="rgba(255,255,255,0.85)" />
       <Text style={styles.statValue}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
 }
 
-function Meta({ icon, children }: { icon: keyof typeof import("@expo/vector-icons").Ionicons.glyphMap; children: React.ReactNode }) {
+function Meta({ icon, children }: { icon: string; children: React.ReactNode }) {
   return (
     <View style={styles.metaPill}>
-      <Ionicons name={icon} size={11} color={theme.colors.textMuted} />
+      <Icon name={icon} size={11} color={theme.colors.textMuted} />
       <Text style={styles.metaText}>{children}</Text>
     </View>
   );

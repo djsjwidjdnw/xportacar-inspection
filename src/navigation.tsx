@@ -1,3 +1,4 @@
+import { Platform } from "react-native";
 import { NavigationContainer, DefaultTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
@@ -33,7 +34,14 @@ export function RootNavigator() {
 
   return (
     <NavigationContainer theme={navTheme}>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Navigator
+        screenOptions={{
+          headerShown: false,
+          // Native slide transitions are janky in the web export — swap
+          // screens instantly on web, keep the native animation on device.
+          animation: Platform.OS === "web" ? "none" : "default",
+        }}
+      >
         {user ? (
           <>
             <Stack.Screen name="Dashboard" component={DashboardScreen} />

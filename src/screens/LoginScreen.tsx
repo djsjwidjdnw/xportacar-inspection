@@ -3,7 +3,7 @@ import {
   Alert, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { Ionicons } from "@expo/vector-icons";
+import { Icon } from "../components/Icon";
 
 import { supabase } from "../lib/supabase";
 import { theme } from "../lib/theme";
@@ -43,7 +43,7 @@ export function LoginScreen() {
         <View style={styles.field}>
           <Text style={styles.label}>Email</Text>
           <View style={styles.inputWrap}>
-            <Ionicons name="mail-outline" size={16} color={theme.colors.textLight} style={styles.inputIcon} />
+            <Icon name="mail-outline" size={16} color={theme.colors.textLight} style={styles.inputIcon} />
             <TextInput
               value={email}
               onChangeText={setEmail}
@@ -60,7 +60,7 @@ export function LoginScreen() {
         <View style={styles.field}>
           <Text style={styles.label}>Password</Text>
           <View style={styles.inputWrap}>
-            <Ionicons name="lock-closed-outline" size={16} color={theme.colors.textLight} style={styles.inputIcon} />
+            <Icon name="lock-closed-outline" size={16} color={theme.colors.textLight} style={styles.inputIcon} />
             <TextInput
               value={password}
               onChangeText={setPassword}
@@ -71,7 +71,7 @@ export function LoginScreen() {
               placeholder="••••••••"
             />
             <Pressable onPress={() => setShowPw((v) => !v)} hitSlop={8} style={styles.eyeBtn}>
-              <Ionicons name={showPw ? "eye-off-outline" : "eye-outline"} size={18} color={theme.colors.textLight} />
+              <Icon name={showPw ? "eye-off-outline" : "eye-outline"} size={18} color={theme.colors.textLight} />
             </Pressable>
           </View>
         </View>
@@ -83,7 +83,7 @@ export function LoginScreen() {
             end={{ x: 1, y: 1 }}
             style={styles.btn}
           >
-            <Ionicons name="log-in-outline" size={18} color={theme.colors.white} />
+            <Icon name="log-in-outline" size={18} color={theme.colors.white} />
             <Text style={styles.btnText}>{loading ? "Signing in…" : "Sign in"}</Text>
           </LinearGradient>
         </Pressable>

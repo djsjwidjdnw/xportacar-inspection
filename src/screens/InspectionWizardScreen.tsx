@@ -5,7 +5,7 @@ import {
 } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
-import { Ionicons } from "@expo/vector-icons";
+import { Icon } from "../components/Icon";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -61,6 +61,38 @@ async function compressForUpload(uri: string): Promise<string> {
     // original. Upload still proceeds, just slower.
     return uri;
   }
+}
+
+// Web-only image capture: a hidden <input type="file" accept="image/*"
+// capture="environment"> that opens the rear camera on mobile Safari and falls
+// back to the photo library elsewhere. Returns an object-URL the rest of the
+// upload pipeline treats exactly like a native asset uri.
+function pickImageWeb(): Promise<{ uri: string } | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g = globalThis as any;
+  return new Promise((resolve) => {
+    const doc = g.document;
+    if (!doc) { resolve(null); return; }
+    const input = doc.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.capture = "environment";
+    input.style.cssText = "position:fixed;left:-9999px;opacity:0";
+    let settled = false;
+    const finish = (val: { uri: string } | null) => {
+      if (settled) return;
+      settled = true;
+      try { doc.body.removeChild(input); } catch { /* already gone */ }
+      resolve(val);
+    };
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      finish(file ? { uri: g.URL.createObjectURL(file) } : null);
+    };
+    input.oncancel = () => finish(null);
+    doc.body.appendChild(input);
+    input.click();
+  });
 }
 
 // ---- Step config ----------------------------------------------------
@@ -267,7 +299,7 @@ export function InspectionWizardScreen({
 
   const uploadOne = useCallback(async (
     slotKey: string,
-    asset: ImagePicker.ImagePickerAsset,
+    asset: { uri: string },
     prefix: "photos" | "documents" | "other" | "damages",
   ) => {
     await ensureBucket();
@@ -292,22 +324,27 @@ export function InspectionWizardScreen({
 
   const takePhoto = async (slotKey: string, kind: UploadKind) => {
     if (readOnly) return;
-    console.log(`[InspectionWizard] takePhoto: slot=${slotKey} kind=${kind}`);
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert("Camera disabled", "Grant camera access in Settings to capture photos.");
-      return;
+    // Web: an HTML file input with accept=image/* + capture=environment, which
+    // opens the rear camera on mobile Safari. Native: the device camera.
+    let asset: { uri: string };
+    if (Platform.OS === "web") {
+      const picked = await pickImageWeb();
+      if (!picked) return;
+      asset = picked;
+    } else {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Camera disabled", "Grant camera access in Settings to capture photos.");
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.7,
+        allowsEditing: false,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      asset = result.assets[0];
     }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.7,
-      allowsEditing: false,
-    });
-    if (result.canceled || !result.assets?.[0]) {
-      console.log(`[InspectionWizard] takePhoto: cancelled for slot=${slotKey}`);
-      return;
-    }
-    const asset = result.assets[0];
     const localUri = asset.uri;
     console.log(`[InspectionWizard] takePhoto: got local URI for ${slotKey}: ${localUri.slice(0, 60)}…`);
 
@@ -533,14 +570,14 @@ export function InspectionWizardScreen({
       {viewMode && (
         <View style={styles.viewBanner}>
           <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <Ionicons name="eye-outline" size={16} color={theme.colors.brand} />
+            <Icon name="eye-outline" size={16} color={theme.colors.brand} />
             <Text style={styles.viewBannerText}>Viewing inspection (read-only).</Text>
           </View>
           <Pressable
             onPress={() => setViewMode(false)}
             style={({ pressed }) => [styles.editBtn, pressed && { opacity: 0.92 }]}
           >
-            <Ionicons name="create-outline" size={14} color={theme.colors.white} />
+            <Icon name="create-outline" size={14} color={theme.colors.white} />
             <Text style={styles.editBtnText}>Edit</Text>
           </Pressable>
         </View>
@@ -552,7 +589,7 @@ export function InspectionWizardScreen({
       >
         {restoredAt && (
           <View style={styles.resumeBanner}>
-            <Ionicons name="cloud-done-outline" size={16} color={theme.colors.brand} />
+            <Icon name="cloud-done-outline" size={16} color={theme.colors.brand} />
             <Text style={styles.resumeText}>Resumed draft inspection from earlier session.</Text>
             <Pressable
               hitSlop={8}
@@ -570,13 +607,13 @@ export function InspectionWizardScreen({
                 ]);
               }}
             >
-              <Ionicons name="close" size={16} color={theme.colors.textMuted} />
+              <Icon name="close" size={16} color={theme.colors.textMuted} />
             </Pressable>
           </View>
         )}
         <View style={styles.stepHeader}>
           <View style={styles.stepHeaderIcon}>
-            <Ionicons name={currentStep.icon} size={20} color={theme.colors.brand} />
+            <Icon name={currentStep.icon} size={20} color={theme.colors.brand} />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.stepEyebrow}>Step {step} of {STEPS.length}</Text>
@@ -605,7 +642,7 @@ export function InspectionWizardScreen({
             {/* Pricing — sent to the admin panel with the rest of the
                 inspection. Admin can still override either value. */}
             <View style={styles.priceHeader}>
-              <Ionicons name="pricetag-outline" size={14} color={theme.colors.brand} />
+              <Icon name="pricetag-outline" size={14} color={theme.colors.brand} />
               <Text style={styles.priceHeaderText}>Auction pricing</Text>
             </View>
             <View style={{ flexDirection: "row", gap: 10 }}>
@@ -658,7 +695,7 @@ export function InspectionWizardScreen({
                     <>
                       <Image source={{ uri: photos[s.key].local }} style={StyleSheet.absoluteFill} contentFit="cover" />
                       <View style={styles.photoOverlay}>
-                        <Ionicons
+                        <Icon
                           name={photos[s.key].remote ? "checkmark" : "cloud-upload-outline"}
                           size={14}
                           color={theme.colors.white}
@@ -667,7 +704,7 @@ export function InspectionWizardScreen({
                     </>
                   ) : (
                     <View style={styles.photoEmpty}>
-                      <Ionicons name="camera" size={22} color={theme.colors.textLight} />
+                      <Icon name="camera" size={22} color={theme.colors.textLight} />
                       <Text style={styles.photoLabel}>{s.label}</Text>
                       {uploading === s.key && <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginTop: 4 }} />}
                     </View>
@@ -694,7 +731,7 @@ export function InspectionWizardScreen({
                 disabled={uploading !== null}
                 style={({ pressed }) => [styles.addPhotoBtn, pressed && { opacity: 0.92 }]}
               >
-                <Ionicons name="add-circle-outline" size={20} color={theme.colors.brand} />
+                <Icon name="add-circle-outline" size={20} color={theme.colors.brand} />
                 <Text style={styles.addPhotoText}>Add Photo</Text>
                 {uploading?.startsWith("other-") && (
                   <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginLeft: 6 }} />
@@ -708,7 +745,7 @@ export function InspectionWizardScreen({
                   <View key={`${entry.local}-${i}`} style={[styles.photoTile, styles.photoTileDone]}>
                     <Image source={{ uri: entry.local }} style={StyleSheet.absoluteFill} contentFit="cover" />
                     <View style={styles.photoOverlay}>
-                      <Ionicons
+                      <Icon
                         name={entry.remote ? "checkmark" : "cloud-upload-outline"}
                         size={14}
                         color={theme.colors.white}
@@ -720,7 +757,7 @@ export function InspectionWizardScreen({
                         hitSlop={6}
                         style={styles.removeBtn}
                       >
-                        <Ionicons name="close" size={14} color={theme.colors.white} />
+                        <Icon name="close" size={14} color={theme.colors.white} />
                       </Pressable>
                     )}
                   </View>
@@ -736,7 +773,7 @@ export function InspectionWizardScreen({
 
             {damagedPanelsWithoutPhoto > 0 && (
               <View style={styles.warnBanner}>
-                <Ionicons name="camera-outline" size={16} color={theme.colors.warning} />
+                <Icon name="camera-outline" size={16} color={theme.colors.warning} />
                 <Text style={styles.warnText}>
                   {damagedPanelsWithoutPhoto} damaged panel{damagedPanelsWithoutPhoto === 1 ? "" : "s"} still need a photo.
                 </Text>
@@ -764,12 +801,12 @@ export function InspectionWizardScreen({
                     <Text style={styles.panelGroupTitle}>{sec.label}</Text>
                     {sectionDamageCount > 0 ? (
                       <View style={styles.panelGroupBadge}>
-                        <Ionicons name="warning-outline" size={11} color={theme.colors.warning} />
+                        <Icon name="warning-outline" size={11} color={theme.colors.warning} />
                         <Text style={styles.panelGroupBadgeText}>{sectionDamageCount} reported</Text>
                       </View>
                     ) : (
                       <View style={[styles.panelGroupBadge, { backgroundColor: theme.colors.successBg }]}>
-                        <Ionicons name="checkmark-circle" size={11} color={theme.colors.success} />
+                        <Icon name="checkmark-circle" size={11} color={theme.colors.success} />
                         <Text style={[styles.panelGroupBadgeText, { color: theme.colors.success }]}>clear</Text>
                       </View>
                     )}
@@ -808,7 +845,7 @@ export function InspectionWizardScreen({
                             ) : uploading === p ? (
                               <ActivityIndicator size="small" color={theme.colors.brand} />
                             ) : (
-                              <Ionicons name="camera" size={18} color={theme.colors.brand} />
+                              <Icon name="camera" size={18} color={theme.colors.brand} />
                             )}
                           </Pressable>
                         )}
@@ -864,11 +901,11 @@ export function InspectionWizardScreen({
                   {docs[s.key] ? (
                     <>
                       <Image source={{ uri: docs[s.key] }} style={StyleSheet.absoluteFill} contentFit="cover" />
-                      <View style={styles.photoOverlay}><Ionicons name="checkmark" size={14} color={theme.colors.white} /></View>
+                      <View style={styles.photoOverlay}><Icon name="checkmark" size={14} color={theme.colors.white} /></View>
                     </>
                   ) : (
                     <View style={styles.photoEmpty}>
-                      <Ionicons name="document-text-outline" size={22} color={theme.colors.textLight} />
+                      <Icon name="document-text-outline" size={22} color={theme.colors.textLight} />
                       <Text style={styles.photoLabel}>{s.label}</Text>
                       {uploading === s.key && <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginTop: 4 }} />}
                     </View>
@@ -911,7 +948,7 @@ export function InspectionWizardScreen({
 
             {damagedPanelsWithoutPhoto > 0 && (
               <View style={[styles.warnBanner, { marginTop: 16 }]}>
-                <Ionicons name="alert-circle-outline" size={16} color={theme.colors.warning} />
+                <Icon name="alert-circle-outline" size={16} color={theme.colors.warning} />
                 <Text style={styles.warnText}>
                   {damagedPanelsWithoutPhoto} damaged panel{damagedPanelsWithoutPhoto === 1 ? "" : "s"} missing a photo. You can still submit, but buyers see only the severity tag.
                 </Text>
@@ -922,7 +959,7 @@ export function InspectionWizardScreen({
                 the condition report. */}
             <View style={[styles.card, { marginTop: 16 }]}>
               <View style={styles.priceHeader}>
-                <Ionicons name="create-outline" size={14} color={theme.colors.brand} />
+                <Icon name="create-outline" size={14} color={theme.colors.brand} />
                 <Text style={styles.priceHeaderText}>Inspector notes</Text>
               </View>
               {readOnly ? (
@@ -948,7 +985,7 @@ export function InspectionWizardScreen({
                   style={styles.submitBtn}
                 >
                   {submitting && <ActivityIndicator color={theme.colors.white} />}
-                  <Ionicons name="checkmark-done-outline" size={20} color={theme.colors.white} />
+                  <Icon name="checkmark-done-outline" size={20} color={theme.colors.white} />
                   <Text style={styles.submitText}>{submitting ? "Submitting…" : "Submit inspection"}</Text>
                 </LinearGradient>
               </Pressable>
@@ -986,7 +1023,7 @@ function Stepper({ step }: { step: number }) {
                 ]}
               >
                 {done ? (
-                  <Ionicons name="checkmark" size={14} color={theme.colors.white} />
+                  <Icon name="checkmark" size={14} color={theme.colors.white} />
                 ) : (
                   <Text style={[styles.stepDotText, active && { color: theme.colors.white }]}>{s.n}</Text>
                 )}
@@ -1016,10 +1053,10 @@ function Card({ children }: { children: React.ReactNode }) {
   return <View style={styles.card}>{children}</View>;
 }
 
-function SummaryCard({ icon, value, label, complete }: { icon: keyof typeof Ionicons.glyphMap; value: string; label: string; complete?: boolean }) {
+function SummaryCard({ icon, value, label, complete }: { icon: string; value: string; label: string; complete?: boolean }) {
   return (
     <View style={styles.summaryItem}>
-      <Ionicons name={icon} size={18} color={complete ? theme.colors.success : theme.colors.textMuted} />
+      <Icon name={icon} size={18} color={complete ? theme.colors.success : theme.colors.textMuted} />
       <Text style={[styles.summaryNum, complete && { color: theme.colors.success }]}>{value}</Text>
       <Text style={styles.summaryLabel}>{label}</Text>
     </View>
@@ -1097,7 +1134,7 @@ function DamagePicker({
               onPress={onTakePhoto}
               style={({ pressed }) => [styles.modalPhotoBtn, pressed && { opacity: 0.92 }]}
             >
-              <Ionicons name={hasPhoto ? "camera" : "camera-outline"} size={18} color={theme.colors.brand} />
+              <Icon name={hasPhoto ? "camera" : "camera-outline"} size={18} color={theme.colors.brand} />
               <Text style={styles.modalPhotoText}>
                 {hasPhoto ? "Retake damage photo" : "Take damage photo"}
               </Text>
@@ -1281,7 +1318,7 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 18, fontWeight: "800", color: theme.colors.text },
   modalSub:   { color: theme.colors.textLight, fontSize: 12, marginTop: 4, marginBottom: 4 },
   levelRow: { flexDirection: "row", gap: 6, marginVertical: 14, flexWrap: "wrap" },
-  levelBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: theme.radius.full },
+  levelBtn: { paddingHorizontal: 14, minHeight: 44, justifyContent: "center", borderRadius: theme.radius.full },
   levelText: { fontSize: 12, fontWeight: "800", textTransform: "uppercase" },
   modalPhotoBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
