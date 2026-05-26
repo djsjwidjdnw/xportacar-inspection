@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView,
   StyleSheet, Text, TextInput, View,
@@ -14,6 +14,7 @@ import { Button } from "../components/Button";
 import { Spinner } from "../components/Spinner";
 import { supabase } from "../lib/supabase";
 import { theme, formatKm } from "../lib/theme";
+import { estimateValuation, type Valuation } from "../lib/valuation";
 import { useAuth } from "../lib/auth";
 import type { VehicleRow } from "../lib/types";
 
@@ -208,6 +209,19 @@ export function InspectionWizardScreen({
   // buyer/web condition report can show them.
   const [notes, setNotes] = useState("");
 
+  // Market estimate + auto-fill. Auto-fills starting=avg / reserve=min until
+  // the inspector edits a price (or for an existing vehicle with saved prices).
+  const [pricesTouched, setPricesTouched] = useState<boolean>(!!incomingId);
+  const marketEstimate = useMemo<Valuation | null>(() => {
+    if (!make.trim() || !model.trim() || !year.trim()) return null;
+    return estimateValuation({ make, model, year: Number(year), mileageKm: Number(mileage) || undefined });
+  }, [make, model, year, mileage]);
+  useEffect(() => {
+    if (!marketEstimate || pricesTouched || readOnly) return;
+    setStartingPrice(String(marketEstimate.avgEur));
+    setReservePrice(String(marketEstimate.minEur));
+  }, [marketEstimate, pricesTouched, readOnly]);
+
   // Photo state — record of slot key -> { local URI from camera (shown
   // instantly), remote public URL after Storage upload (used on submit).
   // Decoupling the two means the thumbnail appears the moment the picker
@@ -272,6 +286,7 @@ export function InspectionWizardScreen({
         setMileage(data.mileage); setColor(data.color); setCity(data.city);
         setSellerName(data.sellerName); setSellerPhone(data.sellerPhone);
         setStartingPrice(data.startingPrice); setReservePrice(data.reservePrice);
+        if (data.startingPrice || data.reservePrice) setPricesTouched(true);
         setNotes(data.notes ?? "");
         setStep(data.step);
         setRestoredAt(data.ts);
@@ -665,6 +680,26 @@ export function InspectionWizardScreen({
               <Field label="Seller phone" style={{ flex: 1 }}><TextInput value={sellerPhone} onChangeText={setSellerPhone} keyboardType="phone-pad" style={styles.input} editable={!readOnly} placeholder="+971 50 …" placeholderTextColor={theme.colors.textLight} /></Field>
             </View>
 
+            {/* Live market estimate from make/model/year/mileage. */}
+            {marketEstimate && (
+              <View style={styles.estCard}>
+                <View style={styles.estHeaderRow}>
+                  <Icon name="pricetag-outline" size={14} color={theme.colors.brand} />
+                  <Text style={styles.estTitle}>Market estimate</Text>
+                </View>
+                <View style={styles.estCols}>
+                  <EstCol label="Min" value={marketEstimate.minEur} />
+                  <EstCol label="Avg" value={marketEstimate.avgEur} highlight />
+                  <EstCol label="Max" value={marketEstimate.maxEur} />
+                </View>
+                <Text style={styles.estNote}>
+                  {marketEstimate.source === "market_data"
+                    ? `Based on ${marketEstimate.dataPoints} comparable listings`
+                    : "Estimated from market data — starting price & reserve pre-filled, adjust as needed"}
+                </Text>
+              </View>
+            )}
+
             {/* Pricing — sent to the admin panel with the rest of the
                 inspection. Admin can still override either value. */}
             <View style={styles.priceHeader}>
@@ -675,7 +710,7 @@ export function InspectionWizardScreen({
               <Field label="Starting price (EUR)" required style={{ flex: 1 }}>
                 <TextInput
                   value={startingPrice}
-                  onChangeText={(v) => setStartingPrice(v.replace(/[^0-9]/g, ""))}
+                  onChangeText={(v) => { setStartingPrice(v.replace(/[^0-9]/g, "")); setPricesTouched(true); }}
                   keyboardType="number-pad"
                   style={styles.input}
                   editable={!readOnly}
@@ -686,7 +721,7 @@ export function InspectionWizardScreen({
               <Field label="Reserve price (EUR)" style={{ flex: 1 }}>
                 <TextInput
                   value={reservePrice}
-                  onChangeText={(v) => setReservePrice(v.replace(/[^0-9]/g, ""))}
+                  onChangeText={(v) => { setReservePrice(v.replace(/[^0-9]/g, "")); setPricesTouched(true); }}
                   keyboardType="number-pad"
                   style={styles.input}
                   editable={!readOnly}
@@ -1079,6 +1114,17 @@ function Card({ children }: { children: React.ReactNode }) {
   return <View style={styles.card}>{children}</View>;
 }
 
+function EstCol({ label, value, highlight }: { label: string; value: number; highlight?: boolean }) {
+  return (
+    <View style={styles.estCol}>
+      <Text style={styles.estColLabel}>{label}</Text>
+      <Text style={[styles.estColValue, highlight && { color: theme.colors.brand }]}>
+        €{value.toLocaleString("en-GB")}
+      </Text>
+    </View>
+  );
+}
+
 function SummaryCard({ icon, value, label, complete }: { icon: string; value: string; label: string; complete?: boolean }) {
   return (
     <View style={styles.summaryItem}>
@@ -1222,6 +1268,16 @@ const styles = StyleSheet.create({
   priceHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8, marginBottom: 8 },
   priceHeaderText: { fontSize: 12, fontWeight: "800", color: theme.colors.brand, textTransform: "uppercase", letterSpacing: 0.5 },
   priceHint: { fontSize: 11, color: theme.colors.textLight, lineHeight: 16, marginTop: 4 },
+
+  // Market estimate card
+  estCard: { marginTop: 8, marginBottom: 4, padding: 14, borderRadius: theme.radius.lg, backgroundColor: theme.colors.brandLight, borderWidth: 1, borderColor: "#b2ddff" },
+  estHeaderRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 10 },
+  estTitle: { fontSize: 12, fontWeight: "800", color: theme.colors.brand, textTransform: "uppercase", letterSpacing: 0.5 },
+  estCols: { flexDirection: "row", gap: 8 },
+  estCol: { flex: 1, alignItems: "center", paddingVertical: 8, borderRadius: theme.radius.md, backgroundColor: theme.colors.white },
+  estColLabel: { fontSize: 10, fontWeight: "800", color: theme.colors.textLight, textTransform: "uppercase", letterSpacing: 0.5 },
+  estColValue: { fontSize: 15, fontWeight: "800", color: theme.colors.text, marginTop: 3 },
+  estNote: { fontSize: 11, color: theme.colors.textMuted, marginTop: 10, lineHeight: 15 },
 
   // Photo grid
   photoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
