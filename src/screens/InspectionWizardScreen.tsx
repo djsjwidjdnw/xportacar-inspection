@@ -95,6 +95,19 @@ function pickImageWeb(): Promise<{ uri: string } | null> {
   });
 }
 
+// Cross-platform alert. react-native-web's Alert is a no-op (no dialog, and
+// button onPress callbacks never fire) — so on web we use the browser's
+// blocking window.alert and run any follow-up (e.g. navigation) right after.
+function notify(title: string, message?: string) {
+  if (Platform.OS === "web") {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = globalThis as any;
+    if (typeof g.alert === "function") g.alert(message ? `${title}\n\n${message}` : title);
+    return;
+  }
+  Alert.alert(title, message);
+}
+
 // ---- Step config ----------------------------------------------------
 const STEPS = [
   { n: 1, label: "Details",   icon: "document-text-outline" as const },
@@ -305,20 +318,23 @@ export function InspectionWizardScreen({
     await ensureBucket();
     const ts  = Date.now();
     const safe = slotKey.replace(/[^a-z0-9-]+/gi, "_").toLowerCase();
-    // Compress before upload — 1200px max, 80% JPEG. The output is always
-    // JPEG so we hard-code the extension and content type.
-    const compressedUri = await compressForUpload(asset.uri);
+    // On web the asset is already a blob: object-URL from the file input —
+    // skip expo-image-manipulator (flaky/deprecated on web) and upload the blob
+    // directly. On native, compress to 1200px / 80% JPEG first.
+    const sourceUri = Platform.OS === "web" ? asset.uri : await compressForUpload(asset.uri);
     const key = `${prefix}/${user?.id ?? "anon"}/${ts}-${safe}.jpg`;
 
-    const res = await fetch(compressedUri);
+    const res = await fetch(sourceUri);
     const blob = await res.blob();
+    console.log(`[upload] ${slotKey} -> ${key} (${blob.size}b ${blob.type || "image/jpeg"})`);
 
     const { error } = await supabase.storage
       .from(STORAGE_BUCKET)
-      .upload(key, blob, { contentType: "image/jpeg", upsert: false });
-    if (error) throw error;
+      .upload(key, blob, { contentType: blob.type || "image/jpeg", upsert: false });
+    if (error) { console.error(`[upload] storage error (${slotKey}):`, JSON.stringify(error)); throw error; }
 
     const { data: publicUrl } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(key);
+    console.log(`[upload] ${slotKey} OK -> ${publicUrl.publicUrl.slice(0, 70)}`);
     return publicUrl.publicUrl;
   }, [ensureBucket, user]);
 
@@ -334,7 +350,7 @@ export function InspectionWizardScreen({
     } else {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
       if (!perm.granted) {
-        Alert.alert("Camera disabled", "Grant camera access in Settings to capture photos.");
+        notify("Camera disabled", "Grant camera access in Settings to capture photos.");
         return;
       }
       const result = await ImagePicker.launchCameraAsync({
@@ -393,7 +409,7 @@ export function InspectionWizardScreen({
     } catch (e) {
       const msg = (e as Error).message ?? "Unknown error";
       console.warn(`[InspectionWizard] takePhoto: upload FAILED for ${slotKey}: ${msg}`);
-      Alert.alert("Upload failed", `${msg}\n\nThe photo is still on your device — try again or submit later.`);
+      notify("Upload failed", `${msg}\n\nThe photo is still on your device — try again or submit later.`);
     } finally {
       setUploading(null);
     }
@@ -416,19 +432,20 @@ export function InspectionWizardScreen({
 
   // ---- Submit -------------------------------------------------------
   const submit = async () => {
-    if (!user) { Alert.alert("Sign in required", "Sign in before submitting."); return; }
+    console.log("[submit] start", { platform: Platform.OS, hasUser: !!user, userId: user?.id, vehicleId: vehicle.id ?? "(new)" });
+    if (!user) { notify("Sign in required", "Your session expired — sign in again before submitting."); return; }
     if (!vin || !make || !model || !year) {
-      Alert.alert("Missing details", "VIN, make, model and year are required.");
+      notify("Missing details", "VIN, make, model and year are required.");
       setStep(1);
       return;
     }
     if (!startingPrice || Number(startingPrice) <= 0) {
-      Alert.alert("Starting price required", "Enter a starting price for the auction.");
+      notify("Starting price required", "Enter a starting price for the auction.");
       setStep(1);
       return;
     }
     if (reservePrice && Number(reservePrice) < Number(startingPrice)) {
-      Alert.alert("Reserve too low", "Reserve price cannot be below the starting price.");
+      notify("Reserve too low", "Reserve price cannot be below the starting price.");
       setStep(1);
       return;
     }
@@ -458,17 +475,20 @@ export function InspectionWizardScreen({
         inspection_notes: notes.trim() || null,
       };
 
+      console.log("[submit] saving vehicle", { mode: vehicleId ? "update" : "insert", status: vehiclePayload.status, inspector_id: vehiclePayload.inspector_id });
       if (vehicleId) {
         const { error } = await supabase.from("vehicles").update(vehiclePayload).eq("id", vehicleId);
-        if (error) throw error;
+        if (error) { console.error("[submit] vehicle UPDATE error:", JSON.stringify(error)); throw error; }
+        console.log("[submit] vehicle updated OK:", vehicleId);
       } else {
         const { data, error } = await supabase
           .from("vehicles")
           .insert({ ...vehiclePayload, created_by: user.id })
           .select("id")
           .single();
-        if (error) throw error;
+        if (error) { console.error("[submit] vehicle INSERT error:", JSON.stringify(error)); throw error; }
         vehicleId = (data as { id: string }).id;
+        console.log("[submit] vehicle inserted OK:", vehicleId);
       }
       if (!vehicleId) throw new Error("Couldn't create vehicle");
 
@@ -508,9 +528,11 @@ export function InspectionWizardScreen({
           caption:  `Additional photo ${i + 1}`,
         }));
 
+      console.log("[submit] photos:", { capturedSlots: Object.keys(photos).length, uploaded: photoRows.length, docs: docRows.length, other: otherRows.length });
       if (photoRows.length + docRows.length + otherRows.length > 0) {
         const { error } = await supabase.from("vehicle_photos").insert([...photoRows, ...docRows, ...otherRows]);
-        if (error) throw error;
+        if (error) { console.error("[submit] vehicle_photos INSERT error:", JSON.stringify(error)); throw error; }
+        console.log("[submit] vehicle_photos inserted OK");
       }
 
       // Damages — now carry photo_url straight onto the vehicle_damages row.
@@ -525,24 +547,28 @@ export function InspectionWizardScreen({
           // URI would be unreadable by the buyer/web condition report.
           photo_url: d.photoUrl && /^https?:\/\//.test(d.photoUrl) ? d.photoUrl : null,
         }));
+      console.log("[submit] damages:", damageRows.length);
       if (damageRows.length > 0) {
         const { error } = await supabase.from("vehicle_damages").insert(damageRows);
-        if (error) throw error;
+        if (error) { console.error("[submit] vehicle_damages INSERT error:", JSON.stringify(error)); throw error; }
+        console.log("[submit] vehicle_damages inserted OK");
       }
 
-      // Submission succeeded — clear THIS draft (per-vehicle) so the
-      // dashboard's Drafts list doesn't keep showing it.
+      // Submission succeeded — clear the drafts so the dashboard list updates.
       void AsyncStorage.removeItem(autosaveKey).catch(() => {});
-      if (vehicleId) {
-        // Also clear the __new__ slot in case the inspector promoted a
-        // freshly typed draft into a vehicle row.
-        void AsyncStorage.removeItem(AUTOSAVE_KEY_NEW).catch(() => {});
-      }
-      Alert.alert("Inspection submitted", "Vehicle is now ready for listing.", [
-        { text: "Back to dashboard", onPress: () => navigation.goBack() },
-      ]);
+      void AsyncStorage.removeItem(AUTOSAVE_KEY_NEW).catch(() => {});
+
+      console.log("[submit] SUCCESS — inspection saved for vehicle", vehicleId);
+      // react-native-web's Alert is a no-op, so the original success dialog
+      // (with navigation in its button callback) silently did nothing on web —
+      // that was the "doesn't submit" bug. Show a web-safe message, then
+      // navigate directly.
+      notify("Inspection submitted", "Vehicle is now ready for listing.");
+      navigation.goBack();
     } catch (e) {
-      Alert.alert("Submit failed", (e as Error).message ?? "Unknown error");
+      const err = e as { message?: string; details?: string; hint?: string; code?: string };
+      console.error("[submit] FAILED:", JSON.stringify(err));
+      notify("Submit failed", err?.message || err?.details || err?.hint || "Unknown error — check the browser console.");
     } finally {
       setSubmitting(false);
     }
