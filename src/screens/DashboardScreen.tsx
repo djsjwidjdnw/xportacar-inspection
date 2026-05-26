@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Icon } from "../components/Icon";
 import { useFocusEffect } from "@react-navigation/native";
@@ -11,6 +11,7 @@ import { EmptyState } from "../components/EmptyState";
 import { useAuth } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 import { theme, formatKm } from "../lib/theme";
+import { confirmAsync, notify } from "../lib/ui";
 import type { VehicleRow } from "../lib/types";
 import {
   INSPECTION_AUTOSAVE_PREFIX, type AutosavePayload,
@@ -32,11 +33,12 @@ interface CompletedVehicle extends AssignedVehicle {
   photo_count: number;
 }
 
-type Section = { section: "drafts" } | { section: "assigned" } | { section: "completed" };
+type Section = { section: "drafts" } | { section: "changes" } | { section: "assigned" } | { section: "completed" };
 
 export function DashboardScreen({ navigation }: { navigation: { navigate: (s: string, p?: object) => void } }) {
   const { user, signOut } = useAuth();
   const [assigned, setAssigned] = useState<AssignedVehicle[]>([]);
+  const [changesRequested, setChangesRequested] = useState<AssignedVehicle[]>([]);
   const [completed, setCompleted] = useState<CompletedVehicle[]>([]);
   const [drafts, setDrafts] = useState<DraftRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -81,6 +83,34 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
     await loadDrafts();
   };
 
+  // Delete a draft with a (web-safe) confirm. "This cannot be undone."
+  const deleteDraft = async (key: string) => {
+    const ok = await confirmAsync("Delete draft?", "Delete this draft? This cannot be undone.", "Delete", true);
+    if (ok) await discardDraft(key);
+  };
+
+  // Submit an already-inspected vehicle to the admin team for review/listing.
+  const submitForListing = async (vehicleId: string, summary: string) => {
+    const ok = await confirmAsync("Submit for listing?", `Send ${summary} to the admin team to review and list.`, "Submit");
+    if (!ok) return;
+    const { error } = await supabase.from("vehicles").update({ status: "pending_review" }).eq("id", vehicleId);
+    if (error) { notify("Couldn't submit", error.message); return; }
+    // Best-effort: notify the admins that a vehicle is ready for review.
+    try {
+      const { data: admins } = await supabase.from("profiles").select("id").in("role", ["admin", "superadmin"]);
+      const rows = (admins ?? []) as { id: string }[];
+      if (rows.length) {
+        await supabase.from("notifications").insert(rows.map((a) => ({
+          user_id: a.id, type: "status_update",
+          title: "Vehicle ready for listing", body: `${summary} was submitted for listing.`,
+          data: { vehicle_id: vehicleId },
+        })));
+      }
+    } catch { /* notifications are best-effort */ }
+    notify("Submitted for listing", "The admin team will review and publish it.");
+    await load();
+  };
+
   const load = useCallback(async () => {
     if (!user) return;
 
@@ -92,17 +122,26 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
       .in("status", ["inspection_scheduled", "draft"])
       .order("created_at", { ascending: false });
 
-    // Vehicles I've already inspected — pull photo count alongside via the
-    // PostgREST aggregate (`vehicle_photos(count)`).
+    // Vehicles the admin sent back with change requests.
+    const { data: changes } = await supabase
+      .from("vehicles")
+      .select("*")
+      .eq("inspector_id", user.id)
+      .eq("status", "changes_requested")
+      .order("updated_at", { ascending: false });
+
+    // Vehicles I've already inspected/submitted — pull photo count alongside
+    // via the PostgREST aggregate (`vehicle_photos(count)`).
     const { data: done } = await supabase
       .from("vehicles")
       .select("*, vehicle_photos(count)")
       .eq("inspector_id", user.id)
-      .in("status", ["inspected", "listed", "in_auction", "sold"])
+      .in("status", ["inspected", "pending_review", "listed", "in_auction", "sold"])
       .order("inspection_date", { ascending: false })
       .limit(20);
 
     setAssigned((pending as AssignedVehicle[]) ?? []);
+    setChangesRequested((changes as AssignedVehicle[]) ?? []);
     setCompleted(((done ?? []) as (AssignedVehicle & { vehicle_photos: { count: number }[] })[]).map((v) => ({
       ...v,
       photo_count: Array.isArray(v.vehicle_photos) ? (v.vehicle_photos[0]?.count ?? 0) : 0,
@@ -118,10 +157,13 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
   // should always show the freshest state.
   useFocusEffect(useCallback(() => { void loadDrafts(); }, [loadDrafts]));
 
-  // Hide the Drafts section header entirely when there's nothing to show.
-  const sections: Section[] = drafts.length > 0
-    ? [{ section: "drafts" }, { section: "assigned" }, { section: "completed" }]
-    : [{ section: "assigned" }, { section: "completed" }];
+  // Drafts + changes-requested sections only appear when they have content.
+  const sections: Section[] = [
+    ...(drafts.length > 0 ? [{ section: "drafts" as const }] : []),
+    ...(changesRequested.length > 0 ? [{ section: "changes" as const }] : []),
+    { section: "assigned" as const },
+    { section: "completed" as const },
+  ];
 
   if (loading) return <Spinner label="Loading inspections…" />;
 
@@ -198,6 +240,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
               <Icon
                 name={
                   item.section === "drafts"     ? "cloud-outline"
+                  : item.section === "changes"  ? "alert-circle-outline"
                   : item.section === "assigned" ? "clipboard-outline"
                   : "checkmark-done-outline"
                 }
@@ -206,12 +249,14 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
               />
               <Text style={styles.sectionTitle}>
                 {item.section === "drafts"     ? "Drafts in progress"
+                  : item.section === "changes"  ? "Changes requested"
                   : item.section === "assigned" ? "Assigned to you"
                   : "Completed inspections"}
               </Text>
               <View style={styles.countPill}>
                 <Text style={styles.countPillText}>
                   {item.section === "drafts" ? drafts.length
+                    : item.section === "changes" ? changesRequested.length
                     : item.section === "assigned" ? assigned.length
                     : completed.length}
                 </Text>
@@ -238,20 +283,37 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                     </View>
                     <Pressable
                       hitSlop={8}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        Alert.alert("Discard draft?", `Discard the in-progress draft for ${d.summary}?`, [
-                          { text: "Keep", style: "cancel" },
-                          { text: "Discard", style: "destructive", onPress: () => discardDraft(d.key) },
-                        ]);
-                      }}
-                      style={({ pressed }) => [styles.discardBtn, pressed && { opacity: 0.85 }]}
+                      onPress={(e) => { e.stopPropagation(); void deleteDraft(d.key); }}
+                      style={({ pressed }) => [styles.deleteDraftBtn, pressed && { opacity: 0.85 }]}
                     >
-                      <Icon name="trash-outline" size={14} color={theme.colors.error} />
+                      <Icon name="trash-outline" size={13} color={theme.colors.white} />
+                      <Text style={styles.deleteDraftText}>Delete Draft</Text>
                     </Pressable>
                   </Pressable>
                 ))
               )
+            ) : item.section === "changes" ? (
+              changesRequested.map((v) => (
+                <Pressable
+                  key={v.id}
+                  style={({ pressed }) => [styles.changesCard, pressed && { opacity: 0.96 }]}
+                  onPress={() => navigation.navigate("Inspect", { vehicleId: v.id })}
+                >
+                  <View style={styles.changesTop}>
+                    <View style={[styles.cardIconWrap, { backgroundColor: theme.colors.warningBg }]}>
+                      <Icon name="alert-circle-outline" size={20} color={theme.colors.warning} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.cardTitle}>{v.year} {v.make} {v.model}</Text>
+                      <Text style={styles.changesCta}>Tap to make changes &amp; re-submit →</Text>
+                    </View>
+                  </View>
+                  <View style={styles.changesBanner}>
+                    <Icon name="warning-outline" size={14} color={theme.colors.warning} />
+                    <Text style={styles.changesNotes}>{v.review_notes?.trim() || "The admin requested changes before listing."}</Text>
+                  </View>
+                </Pressable>
+              ))
             ) : item.section === "assigned" ? (
               assigned.length === 0 ? (
                 <EmptyState
@@ -292,29 +354,44 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                 body="Once you submit your first inspection, it will appear here for your records."
               />
             ) : (
-              completed.map((v) => (
-                <Pressable
-                  key={v.id}
-                  style={({ pressed }) => [styles.card, pressed && { opacity: 0.96, transform: [{ scale: 0.99 }] }]}
-                  // viewMode: open read-only with an Edit button so the
-                  // inspector can review before any accidental changes.
-                  onPress={() => navigation.navigate("Inspect", { vehicleId: v.id, viewMode: true })}
-                >
-                  <View style={[styles.cardIconWrap, { backgroundColor: theme.colors.successBg }]}>
-                    <Icon name="checkmark" size={20} color={theme.colors.success} />
+              completed.map((v) => {
+                const isInspected = v.status === "inspected";
+                const inReview = v.status === "pending_review";
+                return (
+                  <View key={v.id}>
+                    <Pressable
+                      style={({ pressed }) => [styles.card, isInspected && { marginBottom: 8 }, pressed && { opacity: 0.96, transform: [{ scale: 0.99 }] }]}
+                      // viewMode: open read-only with an Edit button so the
+                      // inspector can review before any accidental changes.
+                      onPress={() => navigation.navigate("Inspect", { vehicleId: v.id, viewMode: true })}
+                    >
+                      <View style={[styles.cardIconWrap, { backgroundColor: isInspected ? theme.colors.brandLight : theme.colors.successBg }]}>
+                        <Icon name={isInspected ? "cloud-upload-outline" : "checkmark"} size={20} color={isInspected ? theme.colors.brand : theme.colors.success} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.cardTitle}>{v.year} {v.make} {v.model}</Text>
+                        <View style={styles.cardMeta}>
+                          <Meta icon="image-outline">{v.photo_count} photos</Meta>
+                          <Meta icon="calendar-outline">{formatDate(v.inspection_date)}</Meta>
+                        </View>
+                      </View>
+                      <View style={inReview ? styles.reviewTag : styles.doneTag}>
+                        <Text style={inReview ? styles.reviewTagText : styles.doneTagText}>
+                          {inReview ? "in review" : v.status.replace(/_/g, " ")}
+                        </Text>
+                      </View>
+                    </Pressable>
+                    {isInspected && (
+                      <Button
+                        label="Submit for Listing"
+                        onPress={() => submitForListing(v.id, `${v.year} ${v.make} ${v.model}`)}
+                        fullWidth
+                        style={{ marginBottom: 10 }}
+                      />
+                    )}
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.cardTitle}>{v.year} {v.make} {v.model}</Text>
-                    <View style={styles.cardMeta}>
-                      <Meta icon="image-outline">{v.photo_count} photos</Meta>
-                      <Meta icon="calendar-outline">{formatDate(v.inspection_date)}</Meta>
-                    </View>
-                  </View>
-                  <View style={styles.doneTag}>
-                    <Text style={styles.doneTagText}>{v.status.replace(/_/g, " ")}</Text>
-                  </View>
-                </Pressable>
-              ))
+                );
+              })
             )}
 
             {item.section === "assigned" && assigned.length > 0 && (
@@ -441,10 +518,31 @@ const styles = StyleSheet.create({
   doneTag:  { paddingHorizontal: 8, paddingVertical: 4, borderRadius: theme.radius.full, backgroundColor: theme.colors.successBg },
   doneTagText: { fontSize: 10, fontWeight: "800", color: theme.colors.success, textTransform: "uppercase", letterSpacing: 0.4 },
 
-  // Draft card discard chip
-  discardBtn: {
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: theme.colors.errorBg,
-    alignItems: "center", justifyContent: "center",
+  // Draft card delete button (prominent, red, web-safe confirm)
+  deleteDraftBtn: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    paddingHorizontal: 10, paddingVertical: 7, borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.error,
   },
+  deleteDraftText: { color: theme.colors.white, fontSize: 11, fontWeight: "800" },
+
+  // Changes-requested card (admin sent it back with notes)
+  changesCard: {
+    backgroundColor: theme.colors.white,
+    borderRadius: theme.radius.xl, padding: 14, marginBottom: 10,
+    borderWidth: 1, borderColor: "#fedf89",
+    shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+  },
+  changesTop: { flexDirection: "row", alignItems: "center", gap: 12 },
+  changesCta: { fontSize: 11, color: theme.colors.warning, fontWeight: "700", marginTop: 4 },
+  changesBanner: {
+    flexDirection: "row", alignItems: "flex-start", gap: 8,
+    marginTop: 12, padding: 10, borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.warningBg,
+  },
+  changesNotes: { flex: 1, fontSize: 12, color: theme.colors.warning, fontWeight: "600", lineHeight: 17 },
+
+  // "In review" tag (pending_review)
+  reviewTag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: theme.radius.full, backgroundColor: theme.colors.brandLight },
+  reviewTagText: { fontSize: 10, fontWeight: "800", color: theme.colors.brand, textTransform: "uppercase", letterSpacing: 0.4 },
 });

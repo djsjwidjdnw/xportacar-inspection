@@ -14,6 +14,7 @@ import { Button } from "../components/Button";
 import { Spinner } from "../components/Spinner";
 import { supabase } from "../lib/supabase";
 import { theme, formatKm } from "../lib/theme";
+import { confirmAsync } from "../lib/ui";
 import { estimateValuation, getMarketValuation, type Valuation } from "../lib/valuation";
 import { useAuth } from "../lib/auth";
 import type { VehicleRow } from "../lib/types";
@@ -175,7 +176,7 @@ export function InspectionWizardScreen({
   // `viewMode` opens the screen in read-only view first (with an Edit
   // button up top). `readOnly` keeps the existing hard-locked behavior.
   route: { params?: { vehicleId?: string | null; readOnly?: boolean; viewMode?: boolean } };
-  navigation: { goBack: () => void; navigate: (s: string) => void };
+  navigation: { goBack: () => void; navigate: (s: string) => void; setOptions: (o: Record<string, unknown>) => void };
 }) {
   const { user } = useAuth();
   const initialViewMode = !!route.params?.viewMode;
@@ -482,6 +483,11 @@ export function InspectionWizardScreen({
     try {
       let vehicleId = vehicle.id;
 
+      // Re-submitting a vehicle the admin sent back goes straight to
+      // pending_review; a normal inspection completes as "inspected".
+      const nextStatus: "inspected" | "pending_review" =
+        vehicle.status === "changes_requested" ? "pending_review" : "inspected";
+
       // Insert or update vehicle.
       const vehiclePayload = {
         vin: vin.trim().toUpperCase(),
@@ -494,7 +500,7 @@ export function InspectionWizardScreen({
         location_country: "UAE",
         fuel_type: vehicle.fuel_type ?? "petrol",
         transmission: vehicle.transmission ?? "automatic",
-        status: "inspected" as const,
+        status: nextStatus,
         seller_name: sellerName || vehicle.seller_name || "Walk-in",
         seller_phone: sellerPhone || vehicle.seller_phone || "+971-",
         inspector_id: user.id,
@@ -592,7 +598,9 @@ export function InspectionWizardScreen({
       // (with navigation in its button callback) silently did nothing on web —
       // that was the "doesn't submit" bug. Show a web-safe message, then
       // navigate directly.
-      notify("Inspection submitted", "Vehicle is now ready for listing.");
+      notify("Inspection submitted", nextStatus === "pending_review"
+        ? "Re-submitted to the admin for review."
+        : "Saved. Tap “Submit for Listing” on your dashboard to send it to the admin.");
       navigation.goBack();
     } catch (e) {
       const err = e as { message?: string; details?: string; hint?: string; code?: string };
@@ -602,6 +610,30 @@ export function InspectionWizardScreen({
       setSubmitting(false);
     }
   };
+
+  // Discard the in-progress inspection (web-safe confirm) and leave.
+  const discardInspection = useCallback(async () => {
+    const ok = await confirmAsync(
+      "Discard inspection?",
+      "Abandon this inspection? Any unsaved progress on this screen will be lost.",
+      "Discard", true,
+    );
+    if (!ok) return;
+    await AsyncStorage.removeItem(autosaveKey).catch(() => {});
+    navigation.goBack();
+  }, [autosaveKey, navigation]);
+
+  // Header "Discard" button — abandon mid-inspection. Hidden in read-only view.
+  useEffect(() => {
+    navigation.setOptions({
+      headerRight: readOnly ? undefined : () => (
+        <Pressable onPress={discardInspection} hitSlop={8} style={styles.discardHeaderBtn}>
+          <Icon name="close" size={15} color={theme.colors.error} />
+          <Text style={styles.discardHeaderText}>Discard</Text>
+        </Pressable>
+      ),
+    });
+  }, [navigation, discardInspection, readOnly]);
 
   if (loading) return <Spinner label="Loading vehicle…" />;
 
@@ -648,24 +680,32 @@ export function InspectionWizardScreen({
             <Text style={styles.resumeText}>Resumed draft inspection from earlier session.</Text>
             <Pressable
               hitSlop={8}
-              onPress={() => {
-                Alert.alert("Discard draft?", "Clear the auto-saved fields and start fresh?", [
-                  { text: "Keep", style: "cancel" },
-                  { text: "Discard", style: "destructive", onPress: () => {
-                    void AsyncStorage.removeItem(autosaveKey);
-                    setVin(""); setMake(""); setModel(""); setYear("");
-                    setMileage(""); setColor(""); setCity("Dubai");
-                    setSellerName(""); setSellerPhone("");
-                    setStartingPrice(""); setReservePrice(""); setNotes("");
-                    setStep(1); setRestoredAt(null);
-                  } },
-                ]);
+              onPress={async () => {
+                const ok = await confirmAsync("Discard draft?", "Clear the auto-saved fields and start fresh?", "Discard", true);
+                if (!ok) return;
+                void AsyncStorage.removeItem(autosaveKey);
+                setVin(""); setMake(""); setModel(""); setYear("");
+                setMileage(""); setColor(""); setCity("Dubai");
+                setSellerName(""); setSellerPhone("");
+                setStartingPrice(""); setReservePrice(""); setNotes("");
+                setStep(1); setRestoredAt(null);
               }}
             >
               <Icon name="close" size={16} color={theme.colors.textMuted} />
             </Pressable>
           </View>
         )}
+        {vehicle.status === "changes_requested" && (
+          <View style={styles.changesReqBanner}>
+            <Icon name="warning-outline" size={16} color={theme.colors.warning} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.changesReqTitle}>Changes requested by admin</Text>
+              {vehicle.review_notes ? <Text style={styles.changesReqText}>“{vehicle.review_notes}”</Text> : null}
+              <Text style={styles.changesReqHint}>Make the changes, then submit again to send it back for review.</Text>
+            </View>
+          </View>
+        )}
+
         <View style={styles.stepHeader}>
           <View style={styles.stepHeaderIcon}>
             <Icon name={currentStep.icon} size={20} color={theme.colors.brand} />
@@ -1423,4 +1463,20 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.brandLight,
   },
   modalPhotoText: { color: theme.colors.brand, fontWeight: "800", fontSize: 14 },
+
+  // Header "Discard" button
+  discardHeaderBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4 },
+  discardHeaderText: { color: theme.colors.error, fontWeight: "800", fontSize: 13 },
+
+  // Changes-requested banner (admin sent the vehicle back)
+  changesReqBanner: {
+    flexDirection: "row", alignItems: "flex-start", gap: 10,
+    padding: 12, marginBottom: 12,
+    backgroundColor: theme.colors.warningBg,
+    borderRadius: theme.radius.md,
+    borderWidth: 1, borderColor: "#fedf89",
+  },
+  changesReqTitle: { fontSize: 13, fontWeight: "800", color: theme.colors.warning },
+  changesReqText: { fontSize: 12, color: theme.colors.warning, marginTop: 3, lineHeight: 17, fontWeight: "600" },
+  changesReqHint: { fontSize: 11, color: theme.colors.textMuted, marginTop: 4, lineHeight: 15 },
 });

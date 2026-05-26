@@ -1,7 +1,9 @@
 // Mirrors the web app's DB types (minimum subset used by mobile).
 
 export type VehicleStatus =
-  | "draft" | "inspection_scheduled" | "inspected" | "listed" | "in_auction"
+  | "draft" | "inspection_scheduled" | "inspected"
+  | "pending_review" | "changes_requested"
+  | "listed" | "in_auction"
   | "sold"  | "payment_pending" | "paid" | "collected" | "shipped" | "delivered";
 
 export type AuctionStatus = "scheduled" | "active" | "ended" | "sold" | "cancelled";
@@ -31,6 +33,7 @@ export interface VehicleRow {
   inspector_id?: string | null;
   inspection_date?: string | null;
   inspection_notes?: string | null;
+  review_notes?: string | null;
 }
 
 export interface AuctionRow {
