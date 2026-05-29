@@ -164,7 +164,7 @@ const DOC_SLOTS = [
 
 const STORAGE_BUCKET = "vehicle-photos";
 
-type UploadKind = "photo" | "document" | "other" | "damage";
+type UploadKind = "photo" | "document" | "other" | "damage" | "paint";
 
 interface CapturedPhoto { local: string; remote: string | null }
 
@@ -244,6 +244,9 @@ export function InspectionWizardScreen({
   const [photos, setPhotos] = useState<Record<string, CapturedPhoto>>({});
   const [otherPhotos, setOtherPhotos] = useState<CapturedPhoto[]>([]);
   const [uploading, setUploading] = useState<string | null>(null);
+  // Paint thickness gauge reading — a single photo of the tester, separate
+  // from damage panels. Persisted as a vehicle_photos row, category "paint_thickness".
+  const [paintThickness, setPaintThickness] = useState<CapturedPhoto | null>(null);
 
   // Damage state — record of panel name -> { level, description, photoUrl? }
   const [damages, setDamages] = useState<Record<string, DamageState>>({});
@@ -400,6 +403,8 @@ export function InspectionWizardScreen({
     // or silently failed against Storage RLS.
     if (kind === "photo") {
       setPhotos((p) => ({ ...p, [slotKey]: { local: localUri, remote: null } }));
+    } else if (kind === "paint") {
+      setPaintThickness({ local: localUri, remote: null });
     } else if (kind === "other") {
       setOtherPhotos((arr) => [...arr, { local: localUri, remote: null }]);
     } else if (kind === "damage") {
@@ -426,6 +431,8 @@ export function InspectionWizardScreen({
       console.log(`[InspectionWizard] takePhoto: upload OK for ${slotKey}: ${url.slice(0, 60)}…`);
       if (kind === "photo") {
         setPhotos((p) => ({ ...p, [slotKey]: { local: localUri, remote: url } }));
+      } else if (kind === "paint") {
+        setPaintThickness({ local: localUri, remote: url });
       } else if (kind === "document") {
         setDocs((d) => ({ ...d, [slotKey]: url }));
       } else if (kind === "other") {
@@ -563,9 +570,21 @@ export function InspectionWizardScreen({
           caption:  `Additional photo ${i + 1}`,
         }));
 
-      console.log("[submit] photos:", { capturedSlots: Object.keys(photos).length, uploaded: photoRows.length, docs: docRows.length, other: otherRows.length });
-      if (photoRows.length + docRows.length + otherRows.length > 0) {
-        const { error } = await supabase.from("vehicle_photos").insert([...photoRows, ...docRows, ...otherRows]);
+      // Paint thickness gauge reading — its own category so the buyer
+      // condition report and admin panel can surface it distinctly.
+      const paintRows = paintThickness?.remote
+        ? [{
+            vehicle_id: vehicleId!,
+            url: paintThickness.remote,
+            category: "paint_thickness",
+            sort_order: 300,
+            caption: "Paint thickness gauge reading",
+          }]
+        : [];
+
+      console.log("[submit] photos:", { capturedSlots: Object.keys(photos).length, uploaded: photoRows.length, docs: docRows.length, other: otherRows.length, paint: paintRows.length });
+      if (photoRows.length + docRows.length + otherRows.length + paintRows.length > 0) {
+        const { error } = await supabase.from("vehicle_photos").insert([...photoRows, ...docRows, ...otherRows, ...paintRows]);
         if (error) { console.error("[submit] vehicle_photos INSERT error:", JSON.stringify(error)); throw error; }
         console.log("[submit] vehicle_photos inserted OK");
       }
@@ -885,6 +904,33 @@ export function InspectionWizardScreen({
         {step === 3 && (
           <View>
             <Text style={styles.tip}>Walk around the car and tag every panel that has damage.</Text>
+
+            {/* Paint Thickness Test — separate from damage panels. */}
+            <View style={styles.paintCard}>
+              <View style={styles.paintHeader}>
+                <Icon name="color-palette-outline" size={16} color={theme.colors.brand} />
+                <Text style={styles.paintTitle}>Paint Thickness Test</Text>
+              </View>
+              <Text style={styles.paintSub}>
+                Photograph the paint thickness gauge reading. Saved to the condition report.
+              </Text>
+              <Pressable
+                onPress={() => takePhoto("paint_thickness", "paint")}
+                disabled={readOnly || uploading !== null}
+                style={({ pressed }) => [styles.paintCapture, pressed && { opacity: 0.9 }]}
+              >
+                {paintThickness ? (
+                  <Image source={{ uri: paintThickness.remote ?? paintThickness.local }} style={styles.paintThumb} contentFit="cover" />
+                ) : uploading === "paint_thickness" ? (
+                  <ActivityIndicator size="small" color={theme.colors.brand} />
+                ) : (
+                  <>
+                    <Icon name="camera" size={20} color={theme.colors.brand} />
+                    <Text style={styles.paintCaptureText}>Capture reading</Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
 
             {damagedPanelsWithoutPhoto > 0 && (
               <View style={styles.warnBanner}>
@@ -1375,6 +1421,22 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.warningBg, borderWidth: 1, borderColor: "#fedf89",
   },
   warnText: { color: theme.colors.warning, fontSize: 12, fontWeight: "700", flex: 1 },
+
+  // Paint thickness test
+  paintCard: {
+    padding: 14, borderRadius: theme.radius.lg, marginBottom: 16,
+    backgroundColor: theme.colors.white, borderWidth: 1, borderColor: theme.colors.border,
+  },
+  paintHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  paintTitle: { fontSize: 14, fontWeight: "800", color: theme.colors.text },
+  paintSub: { fontSize: 12, color: theme.colors.textLight, marginTop: 4, fontWeight: "600", lineHeight: 17 },
+  paintCapture: {
+    marginTop: 12, height: 96, borderRadius: theme.radius.lg, overflow: "hidden",
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    borderWidth: 1, borderColor: theme.colors.brand, borderStyle: "dashed", backgroundColor: theme.colors.bgAlt,
+  },
+  paintCaptureText: { color: theme.colors.brand, fontWeight: "800", fontSize: 13 },
+  paintThumb: { width: "100%", height: "100%" },
 
   // Car outline
   carOutline: { padding: 12, backgroundColor: theme.colors.bgAlt, borderRadius: theme.radius.lg, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 16, alignItems: "center" },

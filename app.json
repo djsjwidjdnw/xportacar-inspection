@@ -17,6 +17,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.xportacar.inspector",
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "XportACar needs camera access to capture vehicle photos during inspection.",
         "NSPhotoLibraryUsageDescription": "XportACar saves inspection photos to your library."
       }
@@ -27,19 +28,39 @@
         "backgroundColor": "#1570EF"
       },
       "package": "com.xportacar.inspector",
-      "permissions": ["CAMERA", "RECORD_AUDIO", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"]
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-secure-store",
-      ["expo-camera", { "cameraPermission": "Allow XportACar to access your camera to document vehicle inspections." }],
-      ["expo-image-picker", { "photosPermission": "Allow XportACar to access photos for vehicle inspections.", "cameraPermission": "Allow XportACar to access the camera for vehicle inspections." }]
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow XportACar to access your camera to document vehicle inspections."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow XportACar to access photos for vehicle inspections.",
+          "cameraPermission": "Allow XportACar to access the camera for vehicle inspections."
+        }
+      ]
     ],
     "extra": {
       "supabaseUrl": "https://klettmjnnttajdyajafn.supabase.co",
-      "supabaseAnonKey": "sb_publishable_rawIwWZv12q9_VxVuaMOWQ_A2oXTEJ_"
-    }
+      "supabaseAnonKey": "sb_publishable_rawIwWZv12q9_VxVuaMOWQ_A2oXTEJ_",
+      "eas": {
+        "projectId": "aa330a36-df38-452f-9cb8-4c02c780701f"
+      }
+    },
+    "owner": "chasebitz"
   }
 }

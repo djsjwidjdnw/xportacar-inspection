@@ -1,0 +1,36 @@
+{
+  "cli": {
+    "version": ">= 5.9.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "credentialsSource": "local",
+      "ios": {
+        "resourceClass": "m-medium"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleTeamId": "PJ93UCU3CM",
+        "ascAppId": "6774364375",
+        "ascApiKeyPath": "C:\\Users\\chase\\AuthKey_A29TQJT273.p8",
+        "ascApiKeyId": "A29TQJT273",
+        "ascApiKeyIssuerId": "03c3c981-65cc-45ec-8503-259eb9082898"
+      }
+    }
+  }
+}
