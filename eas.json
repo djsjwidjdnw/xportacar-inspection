@@ -1,7 +1,8 @@
 {
   "cli": {
     "version": ">= 5.9.0",
-    "appVersionSource": "remote"
+    "appVersionSource": "remote",
+    "promptToConfigurePushNotifications": false
   },
   "build": {
     "development": {
@@ -10,6 +11,7 @@
     },
     "preview": {
       "distribution": "internal",
+      "channel": "preview",
       "android": {
         "buildType": "apk"
       }
@@ -17,6 +19,7 @@
     "production": {
       "autoIncrement": true,
       "credentialsSource": "local",
+      "channel": "production",
       "ios": {
         "resourceClass": "m-medium"
       }
