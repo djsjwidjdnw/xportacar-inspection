@@ -24,6 +24,7 @@ import {
   ALL_MAKES, POPULAR_MAKES, MARKET_SPECS, modelsForMake, isKnownMake, isKnownModel,
 } from "../lib/vehicleData";
 import { decodeVin, isValidVin, type DecodedVin, type FuelType, type Transmission } from "../lib/vinDecoder";
+import { base64ToBytes } from "../lib/bytes";
 
 type TFunc = (key: string, values?: Record<string, string | number>) => string;
 
@@ -61,18 +62,39 @@ export { autosaveKeyFor as inspectionAutosaveKeyFor, AUTOSAVE_KEY_PREFIX as INSP
 // Resize + compress an image before upload. Max 1200px on the longest
 // side; JPEG @ 80%. Drops a 5 MB photo to ~250-400 kB which uploads
 // 10-20x faster on cellular and keeps Storage bills reasonable.
-async function compressForUpload(uri: string): Promise<string> {
+//
+// Returns the compressed `base64` too (base64: true) — on native we upload
+// those decoded bytes directly, because fetch(file://).blob() yields a Blob
+// whose bytes don't cross the RN bridge and Storage ends up with a 0-byte file.
+async function compressForUpload(uri: string): Promise<{ uri: string; base64: string | null }> {
   try {
     const result = await ImageManipulator.manipulateAsync(
       uri,
       [{ resize: { width: 1200 } }],
-      { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
+      { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG, base64: true },
     );
-    return result.uri;
+    return { uri: result.uri, base64: result.base64 ?? null };
   } catch {
     // If manipulation fails (rare — bad codec, OOM), fall back to the
-    // original. Upload still proceeds, just slower.
-    return uri;
+    // original URI with no base64; uploadOne then reads bytes via fetch.
+    return { uri, base64: null };
+  }
+}
+
+// Read a stored object's byte size via the list API (metadata only — no body
+// download). Returns null if it can't be determined. Used to reject 0-byte
+// uploads before they become a vehicle_photos row.
+async function uploadedSize(key: string): Promise<number | null> {
+  try {
+    const slash = key.lastIndexOf("/");
+    const folder = key.slice(0, slash);
+    const name = key.slice(slash + 1);
+    const { data } = await supabase.storage.from(STORAGE_BUCKET).list(folder, { search: name, limit: 100 });
+    const obj = data?.find((o) => o.name === name);
+    const size = (obj?.metadata as { size?: number } | undefined)?.size;
+    return typeof size === "number" ? size : null;
+  } catch {
+    return null;
   }
 }
 
@@ -624,25 +646,57 @@ export function InspectionWizardScreen({
   ) => {
     const ts  = Date.now();
     const safe = slotKey.replace(/[^a-z0-9-]+/gi, "_").toLowerCase();
-    // On web the asset is already a blob: object-URL from the file input —
-    // skip expo-image-manipulator (flaky/deprecated on web) and upload the blob
-    // directly. On native, compress to 1200px / 80% JPEG first.
-    const sourceUri = Platform.OS === "web" ? asset.uri : await compressForUpload(asset.uri);
     const key = `${prefix}/${user?.id ?? "anon"}/${ts}-${safe}.jpg`;
 
-    const res = await fetch(sourceUri);
-    const blob = await res.blob();
-    console.log(`[upload] ${slotKey} -> ${key} (${blob.size}b ${blob.type || "image/jpeg"})`);
+    // Build the upload body as REAL bytes. On web the file-input object-URL
+    // blob uploads fine (browser fetch reads file bodies). On native,
+    // fetch(file://).blob() hands Supabase a 0-byte body, so we compress to
+    // JPEG with base64:true and upload the decoded bytes (the official RN
+    // pattern). A fetch().arrayBuffer() fallback covers the rare case where
+    // manipulation can't emit base64.
+    let body: Blob | Uint8Array;
+    let contentType = "image/jpeg";
+    if (Platform.OS === "web") {
+      const blob = await (await fetch(asset.uri)).blob();
+      if (blob.size === 0) throw new Error(t("submit.uploadEmptyBody"));
+      body = blob;
+      contentType = blob.type || "image/jpeg";
+    } else {
+      const { base64 } = await compressForUpload(asset.uri);
+      let bytes: Uint8Array | null = base64 ? base64ToBytes(base64) : null;
+      if (!bytes || bytes.byteLength === 0) {
+        try {
+          const ab = await (await fetch(asset.uri)).arrayBuffer();
+          bytes = new Uint8Array(ab);
+        } catch { /* leave null → guarded below */ }
+      }
+      if (!bytes || bytes.byteLength === 0) throw new Error(t("submit.uploadEmptyBody"));
+      body = bytes;
+    }
+
+    const size = body instanceof Uint8Array ? body.byteLength : body.size;
+    console.log(`[upload] ${slotKey} -> ${key} (${size}b ${contentType})`);
 
     const { error } = await supabase.storage
       .from(STORAGE_BUCKET)
-      .upload(key, blob, { contentType: blob.type || "image/jpeg", upsert: false });
+      .upload(key, body, { contentType, upsert: false });
     if (error) { console.error(`[upload] storage error (${slotKey}):`, JSON.stringify(error)); throw error; }
 
+    // Defense-in-depth: confirm the STORED object is non-zero. If it landed
+    // empty, delete it and fail so we never persist a vehicle_photos row that
+    // points at a 0-byte file. (null = couldn't verify; local bytes already
+    // checked > 0, so we let it through.)
+    const stored = await uploadedSize(key);
+    if (stored === 0) {
+      await supabase.storage.from(STORAGE_BUCKET).remove([key]).catch(() => {});
+      console.error(`[upload] 0-byte object stored for ${slotKey} — removed`);
+      throw new Error(t("submit.uploadEmptyBody"));
+    }
+
     const { data: publicUrl } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(key);
-    console.log(`[upload] ${slotKey} OK -> ${publicUrl.publicUrl.slice(0, 70)}`);
+    console.log(`[upload] ${slotKey} OK -> ${publicUrl.publicUrl.slice(0, 70)} (${stored ?? "?"}b stored)`);
     return publicUrl.publicUrl;
-  }, [user]);
+  }, [user, t]);
 
   const takePhoto = async (slotKey: string, kind: UploadKind) => {
     if (readOnly) return;
