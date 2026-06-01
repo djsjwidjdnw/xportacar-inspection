@@ -8,20 +8,22 @@ import { Icon } from "../components/Icon";
 import { supabase } from "../lib/supabase";
 import { theme } from "../lib/theme";
 import { registerForPush } from "../lib/push";
+import { useTranslation } from "../lib/i18n";
 
 export function LoginScreen() {
+  const { t } = useTranslation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPw, setShowPw] = useState(false);
 
   const signIn = async () => {
-    if (!email || !password) return Alert.alert("Missing info", "Enter email and password.");
+    if (!email || !password) return Alert.alert(t("auth.missingInfo"), t("auth.missingBody"));
     setLoading(true);
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
     setLoading(false);
     if (error) {
-      Alert.alert("Sign in failed", error.message);
+      Alert.alert(t("auth.signInFailed"), error.message);
       return;
     }
     // Push is best-effort — Expo Go SDK 53+ removed push token support so
@@ -36,12 +38,12 @@ export function LoginScreen() {
           <Image source={require("../../assets/logo.jpg")} style={styles.logo} resizeMode="contain" />
         </View>
 
-        <Text style={styles.tagline}>Inspector Portal</Text>
-        <Text style={styles.title}>Sign in</Text>
-        <Text style={styles.subtitle}>Use the credentials issued by your XportACar coordinator to start an inspection.</Text>
+        <Text style={styles.tagline}>{t("auth.portal")}</Text>
+        <Text style={styles.title}>{t("auth.signIn")}</Text>
+        <Text style={styles.subtitle}>{t("auth.signInBlurb")}</Text>
 
         <View style={styles.field}>
-          <Text style={styles.label}>Email</Text>
+          <Text style={styles.label}>{t("auth.email")}</Text>
           <View style={styles.inputWrap}>
             <Icon name="mail-outline" size={16} color={theme.colors.textLight} style={styles.inputIcon} />
             <TextInput
@@ -58,7 +60,7 @@ export function LoginScreen() {
         </View>
 
         <View style={styles.field}>
-          <Text style={styles.label}>Password</Text>
+          <Text style={styles.label}>{t("auth.password")}</Text>
           <View style={styles.inputWrap}>
             <Icon name="lock-closed-outline" size={16} color={theme.colors.textLight} style={styles.inputIcon} />
             <TextInput
@@ -84,11 +86,11 @@ export function LoginScreen() {
             style={styles.btn}
           >
             <Icon name="log-in-outline" size={18} color={theme.colors.white} />
-            <Text style={styles.btnText}>{loading ? "Signing in…" : "Sign in"}</Text>
+            <Text style={styles.btnText}>{loading ? t("auth.signingIn") : t("auth.signIn")}</Text>
           </LinearGradient>
         </Pressable>
 
-        <Text style={styles.foot}>Need access? Contact your coordinator.</Text>
+        <Text style={styles.foot}>{t("auth.foot")}</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );

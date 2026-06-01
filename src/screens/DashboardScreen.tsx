@@ -12,7 +12,10 @@ import { useAuth } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 import { theme, formatKm } from "../lib/theme";
 import { confirmAsync, notify } from "../lib/ui";
+import { useTranslation, SUPPORTED, LANG_LABELS, type Locale } from "../lib/i18n";
 import type { VehicleRow } from "../lib/types";
+
+type TFunc = (key: string, values?: Record<string, string | number>) => string;
 import {
   INSPECTION_AUTOSAVE_PREFIX, type AutosavePayload,
 } from "./InspectionWizardScreen";
@@ -37,6 +40,7 @@ type Section = { section: "drafts" } | { section: "changes" } | { section: "assi
 
 export function DashboardScreen({ navigation }: { navigation: { navigate: (s: string, p?: object) => void } }) {
   const { user, signOut } = useAuth();
+  const { t, locale, setLocale } = useTranslation();
   const [assigned, setAssigned] = useState<AssignedVehicle[]>([]);
   const [changesRequested, setChangesRequested] = useState<AssignedVehicle[]>([]);
   const [completed, setCompleted] = useState<CompletedVehicle[]>([]);
@@ -67,7 +71,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
             key,
             vehicleId: data.vehicleId,
             summary: data.vehicleSummary
-              ?? (data.year && data.make && data.model ? `${data.year} ${data.make} ${data.model}` : "Untitled draft"),
+              ?? (data.year && data.make && data.model ? `${data.year} ${data.make} ${data.model}` : t("dash.untitledDraft")),
             step: data.step,
             ts: data.ts,
           });
@@ -85,16 +89,16 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
 
   // Delete a draft with a (web-safe) confirm. "This cannot be undone."
   const deleteDraft = async (key: string) => {
-    const ok = await confirmAsync("Delete draft?", "Delete this draft? This cannot be undone.", "Delete", true);
+    const ok = await confirmAsync(t("dash.deleteDraftQ"), t("dash.deleteDraftBody"), t("common.delete"), true);
     if (ok) await discardDraft(key);
   };
 
   // Submit an already-inspected vehicle to the admin team for review/listing.
   const submitForListing = async (vehicleId: string, summary: string) => {
-    const ok = await confirmAsync("Submit for listing?", `Send ${summary} to the admin team to review and list.`, "Submit");
+    const ok = await confirmAsync(t("dash.submitQ"), t("dash.submitBody", { summary }), t("common.submit"));
     if (!ok) return;
     const { error } = await supabase.from("vehicles").update({ status: "pending_review" }).eq("id", vehicleId);
-    if (error) { notify("Couldn't submit", error.message); return; }
+    if (error) { notify(t("dash.submitErr"), error.message); return; }
     // Best-effort: notify the admins that a vehicle is ready for review.
     try {
       const { data: admins } = await supabase.from("profiles").select("id").in("role", ["admin", "superadmin"]);
@@ -107,7 +111,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
         })));
       }
     } catch { /* notifications are best-effort */ }
-    notify("Submitted for listing", "The admin team will review and publish it.");
+    notify(t("dash.submitOk"), t("dash.submitOkBody"));
     await load();
   };
 
@@ -165,7 +169,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
     { section: "completed" as const },
   ];
 
-  if (loading) return <Spinner label="Loading inspections…" />;
+  if (loading) return <Spinner label={t("dash.loading")} />;
 
   const formatDate = (iso: string | null | undefined): string =>
     iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—";
@@ -195,8 +199,8 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
             >
               <View style={styles.heroTop}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.heroEyebrow}>INSPECTOR PORTAL</Text>
-                  <Text style={styles.heroTitle}>Good {greeting()}</Text>
+                  <Text style={styles.heroEyebrow}>{t("dash.portal")}</Text>
+                  <Text style={styles.heroTitle}>{t(greetingKey())}</Text>
                   <Text style={styles.heroSub}>{user?.email}</Text>
                 </View>
                 <Pressable onPress={signOut} hitSlop={8} style={styles.signOutBtn}>
@@ -205,11 +209,37 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
               </View>
 
               <View style={styles.statsRow}>
-                <Stat label="Assigned" value={assigned.length} icon="clipboard-outline" />
+                <Stat label={t("dash.assigned")} value={assigned.length} icon="clipboard-outline" />
                 <View style={styles.statDivider} />
-                <Stat label="Completed" value={completed.length} icon="checkmark-done-outline" />
+                <Stat label={t("dash.completed")} value={completed.length} icon="checkmark-done-outline" />
               </View>
             </LinearGradient>
+
+            {/* Language switcher — mirrors the buyer app's flag+label picker.
+                The inspector app has no settings screen, so it lives in the
+                dashboard header where it's always reachable. */}
+            <View style={styles.langRow}>
+              <Icon name="globe-outline" size={13} color={theme.colors.textLight} />
+              <Text style={styles.langRowLabel}>{t("dash.language")}</Text>
+              <View style={{ flex: 1 }} />
+              <View style={styles.langBtns}>
+                {SUPPORTED.map((code: Locale) => {
+                  const active = locale === code;
+                  return (
+                    <Pressable
+                      key={code}
+                      onPress={() => void setLocale(code)}
+                      style={({ pressed }) => [styles.langBtn, active && styles.langBtnActive, pressed && { opacity: 0.9 }]}
+                      accessibilityRole="button"
+                      accessibilityLabel={LANG_LABELS[code].label}
+                    >
+                      <Text style={styles.langFlag}>{LANG_LABELS[code].flag}</Text>
+                      <Text style={[styles.langCode, active && { color: theme.colors.brand }]}>{code.toUpperCase()}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
 
             {/* New inspection CTA */}
             <Pressable
@@ -226,8 +256,8 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                   <Icon name="add-circle-outline" size={22} color={theme.colors.white} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.ctaTitle}>Start a new inspection</Text>
-                  <Text style={styles.ctaSub}>Walk-in vehicle? Begin a fresh report from scratch.</Text>
+                  <Text style={styles.ctaTitle}>{t("dash.newTitle")}</Text>
+                  <Text style={styles.ctaSub}>{t("dash.newSub")}</Text>
                 </View>
                 <Icon name="chevron-forward" size={20} color={theme.colors.white} />
               </LinearGradient>
@@ -248,10 +278,10 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                 color={theme.colors.textLight}
               />
               <Text style={styles.sectionTitle}>
-                {item.section === "drafts"     ? "Drafts in progress"
-                  : item.section === "changes"  ? "Changes requested"
-                  : item.section === "assigned" ? "Assigned to you"
-                  : "Completed inspections"}
+                {item.section === "drafts"     ? t("dash.sectionDrafts")
+                  : item.section === "changes"  ? t("dash.sectionChanges")
+                  : item.section === "assigned" ? t("dash.sectionAssigned")
+                  : t("dash.sectionCompleted")}
               </Text>
               <View style={styles.countPill}>
                 <Text style={styles.countPillText}>
@@ -277,8 +307,8 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                     <View style={{ flex: 1 }}>
                       <Text style={styles.cardTitle}>{d.summary}</Text>
                       <View style={styles.cardMeta}>
-                        <Meta icon="time-outline">Last edited {formatRelative(d.ts)}</Meta>
-                        <Meta icon="layers-outline">Step {d.step}</Meta>
+                        <Meta icon="time-outline">{t("dash.lastEdited", { when: formatRelative(d.ts, t) })}</Meta>
+                        <Meta icon="layers-outline">{t("dash.stepN", { n: d.step })}</Meta>
                       </View>
                     </View>
                     <Pressable
@@ -287,7 +317,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                       style={({ pressed }) => [styles.deleteDraftBtn, pressed && { opacity: 0.85 }]}
                     >
                       <Icon name="trash-outline" size={13} color={theme.colors.white} />
-                      <Text style={styles.deleteDraftText}>Delete Draft</Text>
+                      <Text style={styles.deleteDraftText}>{t("dash.deleteDraft")}</Text>
                     </Pressable>
                   </Pressable>
                 ))
@@ -305,12 +335,12 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.cardTitle}>{v.year} {v.make} {v.model}</Text>
-                      <Text style={styles.changesCta}>Tap to make changes &amp; re-submit →</Text>
+                      <Text style={styles.changesCta}>{t("dash.changesCta")}</Text>
                     </View>
                   </View>
                   <View style={styles.changesBanner}>
                     <Icon name="warning-outline" size={14} color={theme.colors.warning} />
-                    <Text style={styles.changesNotes}>{v.review_notes?.trim() || "The admin requested changes before listing."}</Text>
+                    <Text style={styles.changesNotes}>{v.review_notes?.trim() || t("dash.changesDefault")}</Text>
                   </View>
                 </Pressable>
               ))
@@ -318,8 +348,8 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
               assigned.length === 0 ? (
                 <EmptyState
                   icon="clipboard-outline"
-                  title="No vehicles assigned"
-                  body="Ask an admin to assign a vehicle to you, or start a new walk-in inspection."
+                  title={t("dash.noAssignedTitle")}
+                  body={t("dash.noAssignedBody")}
                 />
               ) : (
                 assigned.map((v) => (
@@ -342,7 +372,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                       </View>
                     </View>
                     <View style={styles.scheduledTag}>
-                      <Text style={styles.scheduledTagText}>Scheduled</Text>
+                      <Text style={styles.scheduledTagText}>{t("dash.scheduled")}</Text>
                     </View>
                   </Pressable>
                 ))
@@ -350,8 +380,8 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
             ) : completed.length === 0 ? (
               <EmptyState
                 icon="checkmark-done-outline"
-                title="No completed inspections yet"
-                body="Once you submit your first inspection, it will appear here for your records."
+                title={t("dash.noCompletedTitle")}
+                body={t("dash.noCompletedBody")}
               />
             ) : (
               completed.map((v) => {
@@ -371,19 +401,19 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                       <View style={{ flex: 1 }}>
                         <Text style={styles.cardTitle}>{v.year} {v.make} {v.model}</Text>
                         <View style={styles.cardMeta}>
-                          <Meta icon="image-outline">{v.photo_count} photos</Meta>
+                          <Meta icon="image-outline">{t("dash.photosCount", { count: v.photo_count })}</Meta>
                           <Meta icon="calendar-outline">{formatDate(v.inspection_date)}</Meta>
                         </View>
                       </View>
                       <View style={inReview ? styles.reviewTag : styles.doneTag}>
                         <Text style={inReview ? styles.reviewTagText : styles.doneTagText}>
-                          {inReview ? "in review" : v.status.replace(/_/g, " ")}
+                          {inReview ? t("dash.inReview") : v.status.replace(/_/g, " ")}
                         </Text>
                       </View>
                     </Pressable>
                     {isInspected && (
                       <Button
-                        label="Submit for Listing"
+                        label={t("dash.submitForListing")}
                         onPress={() => submitForListing(v.id, `${v.year} ${v.make} ${v.model}`)}
                         fullWidth
                         style={{ marginBottom: 10 }}
@@ -396,7 +426,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
 
             {item.section === "assigned" && assigned.length > 0 && (
               <Button
-                label="Start a new inspection"
+                label={t("dash.newTitle")}
                 variant="outline"
                 onPress={() => navigation.navigate("Inspect", { vehicleId: null })}
                 fullWidth
@@ -429,24 +459,25 @@ function Meta({ icon, children }: { icon: string; children: React.ReactNode }) {
   );
 }
 
-function greeting(): string {
+function greetingKey(): string {
   const h = new Date().getHours();
-  if (h < 12) return "morning";
-  if (h < 18) return "afternoon";
-  return "evening";
+  if (h < 12) return "dash.greetingMorning";
+  if (h < 18) return "dash.greetingAfternoon";
+  return "dash.greetingEvening";
 }
 
-// "5m ago", "2h ago", "yesterday", or absolute date for older entries.
-function formatRelative(ts: number): string {
+// "5m ago", "2h ago", "yesterday", or absolute date for older entries —
+// localised through the passed-in t().
+function formatRelative(ts: number, t: TFunc): string {
   const ms = Date.now() - ts;
   const min = Math.floor(ms / 60_000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
+  if (min < 1) return t("dash.justNow");
+  if (min < 60) return t("dash.minAgo", { n: min });
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
+  if (hr < 24) return t("dash.hourAgo", { n: hr });
   const days = Math.floor(hr / 24);
-  if (days === 1) return "yesterday";
-  if (days < 7) return `${days}d ago`;
+  if (days === 1) return t("dash.yesterday");
+  if (days < 7) return t("dash.daysAgo", { n: days });
   return new Date(ts).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
@@ -490,6 +521,19 @@ const styles = StyleSheet.create({
   },
   ctaTitle: { color: theme.colors.white, fontSize: 14, fontWeight: "800" },
   ctaSub: { color: "rgba(255,255,255,0.8)", fontSize: 11, marginTop: 2 },
+
+  // Language switcher (flag + code pills) — matches the buyer app's pattern.
+  langRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 18, paddingHorizontal: 2 },
+  langRowLabel: { fontSize: 11, fontWeight: "800", color: theme.colors.textLight, textTransform: "uppercase", letterSpacing: 0.6 },
+  langBtns: { flexDirection: "row", gap: 6 },
+  langBtn: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    paddingHorizontal: 8, paddingVertical: 5, borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.white, borderWidth: 1, borderColor: theme.colors.border,
+  },
+  langBtnActive: { borderColor: theme.colors.brand, backgroundColor: theme.colors.brandLight },
+  langFlag: { fontSize: 13 },
+  langCode: { fontSize: 11, fontWeight: "800", color: theme.colors.textMuted, letterSpacing: 0.3 },
 
   sectionHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 10, paddingHorizontal: 2 },
   sectionTitle: { fontSize: 11, fontWeight: "800", color: theme.colors.textLight, textTransform: "uppercase", letterSpacing: 0.6 },

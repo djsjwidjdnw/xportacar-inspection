@@ -17,7 +17,10 @@ import { theme, formatKm } from "../lib/theme";
 import { confirmAsync } from "../lib/ui";
 import { estimateValuation, getMarketValuation, type Valuation } from "../lib/valuation";
 import { useAuth } from "../lib/auth";
+import { useTranslation, panelLabelKey } from "../lib/i18n";
 import type { VehicleRow } from "../lib/types";
+
+type TFunc = (key: string, values?: Record<string, string | number>) => string;
 
 // Auto-save: persists wizard progress under a per-vehicle key so the
 // inspector can pick up multiple drafts. A "new" inspection (no
@@ -111,27 +114,30 @@ function notify(title: string, message?: string) {
 }
 
 // ---- Step config ----------------------------------------------------
+// `tkey` is the display translation key; the step still has a stable `n`.
 const STEPS = [
-  { n: 1, label: "Details",   icon: "document-text-outline" as const },
-  { n: 2, label: "Photos",    icon: "camera-outline" as const },
-  { n: 3, label: "Damage",    icon: "warning-outline" as const },
-  { n: 4, label: "Documents", icon: "folder-open-outline" as const },
-  { n: 5, label: "Review",    icon: "checkmark-done-outline" as const },
+  { n: 1, tkey: "step.details",   icon: "document-text-outline" as const },
+  { n: 2, tkey: "step.photos",    icon: "camera-outline" as const },
+  { n: 3, tkey: "step.damage",    icon: "warning-outline" as const },
+  { n: 4, tkey: "step.documents", icon: "folder-open-outline" as const },
+  { n: 5, tkey: "step.review",    icon: "checkmark-done-outline" as const },
 ] as const;
 
+// `label` is the canonical English caption stored on each vehicle_photos
+// row (read by the web/admin/buyer apps); `tkey` is the on-screen label.
 const PHOTO_SLOTS = [
-  { key: "front",           label: "Front" },
-  { key: "rear",            label: "Rear" },
-  { key: "left",            label: "Left side" },
-  { key: "right",           label: "Right side" },
-  { key: "front_left",      label: "Front-left" },
-  { key: "front_right",     label: "Front-right" },
-  { key: "rear_left",       label: "Rear-left" },
-  { key: "rear_right",      label: "Rear-right" },
-  { key: "interior_front",  label: "Interior front" },
-  { key: "interior_rear",   label: "Interior rear" },
-  { key: "engine",          label: "Engine bay" },
-  { key: "trunk",           label: "Trunk" },
+  { key: "front",           label: "Front",          tkey: "photos.slot.front" },
+  { key: "rear",            label: "Rear",           tkey: "photos.slot.rear" },
+  { key: "left",            label: "Left side",      tkey: "photos.slot.left" },
+  { key: "right",           label: "Right side",     tkey: "photos.slot.right" },
+  { key: "front_left",      label: "Front-left",     tkey: "photos.slot.front_left" },
+  { key: "front_right",     label: "Front-right",    tkey: "photos.slot.front_right" },
+  { key: "rear_left",       label: "Rear-left",      tkey: "photos.slot.rear_left" },
+  { key: "rear_right",      label: "Rear-right",     tkey: "photos.slot.rear_right" },
+  { key: "interior_front",  label: "Interior front", tkey: "photos.slot.interior_front" },
+  { key: "interior_rear",   label: "Interior rear",  tkey: "photos.slot.interior_rear" },
+  { key: "engine",          label: "Engine bay",     tkey: "photos.slot.engine" },
+  { key: "trunk",           label: "Trunk",          tkey: "photos.slot.trunk" },
 ] as const;
 
 const MAX_OTHER_PHOTOS = 10;
@@ -139,12 +145,16 @@ const MAX_OTHER_PHOTOS = 10;
 // Grouped damage panels — each entry maps to a labelled section so the
 // inspector can move through the car visually instead of scanning a flat
 // list.  An ASCII car outline at the top of the step orients the user.
-const PANEL_SECTIONS: ReadonlyArray<{ key: string; label: string; panels: readonly string[] }> = [
-  { key: "front", label: "Front",  panels: ["Front bumper", "Hood",       "Windshield"] },
-  { key: "left",  label: "Left side", panels: ["Left front door",   "Left rear door",   "Left fender"] },
-  { key: "right", label: "Right side", panels: ["Right front door", "Right rear door",  "Right fender"] },
-  { key: "rear",  label: "Rear",  panels: ["Rear bumper", "Trunk lid"] },
-  { key: "top",   label: "Top",   panels: ["Roof"] },
+// Panel names are the canonical English values stored as vehicle_damages.location
+// AND used as keys in the damages state map — they must NOT be translated here.
+// `tkey` translates only the section header; individual panels are translated at
+// render time via panelLabelKey().
+const PANEL_SECTIONS: ReadonlyArray<{ key: string; tkey: string; panels: readonly string[] }> = [
+  { key: "front", tkey: "damage.section.front", panels: ["Front bumper", "Hood",       "Windshield"] },
+  { key: "left",  tkey: "damage.section.left",  panels: ["Left front door",   "Left rear door",   "Left fender"] },
+  { key: "right", tkey: "damage.section.right", panels: ["Right front door", "Right rear door",  "Right fender"] },
+  { key: "rear",  tkey: "damage.section.rear",  panels: ["Rear bumper", "Trunk lid"] },
+  { key: "top",   tkey: "damage.section.top",   panels: ["Roof"] },
 ] as const;
 
 const DAMAGE_LEVELS = ["none", "cosmetic", "minor", "moderate", "major"] as const;
@@ -156,10 +166,12 @@ interface DamageState {
   photoUrl?: string;
 }
 
+// `label` is the canonical English caption stored on the vehicle_photos row;
+// `tkey` is the on-screen label.
 const DOC_SLOTS = [
-  { key: "registration",  label: "Registration" },
-  { key: "service_book",  label: "Service book" },
-  { key: "insurance",     label: "Insurance docs" },
+  { key: "registration",  label: "Registration",   tkey: "docs.slot.registration" },
+  { key: "service_book",  label: "Service book",   tkey: "docs.slot.service_book" },
+  { key: "insurance",     label: "Insurance docs", tkey: "docs.slot.insurance" },
 ] as const;
 
 const STORAGE_BUCKET = "vehicle-photos";
@@ -179,6 +191,7 @@ export function InspectionWizardScreen({
   navigation: { goBack: () => void; navigate: (s: string) => void; setOptions: (o: Record<string, unknown>) => void };
 }) {
   const { user } = useAuth();
+  const { t } = useTranslation();
   const initialViewMode = !!route.params?.viewMode;
   const [viewMode, setViewMode] = useState(initialViewMode);
   // readOnly = either explicitly passed OR the user hasn't tapped Edit yet.
@@ -383,7 +396,7 @@ export function InspectionWizardScreen({
     } else {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
       if (!perm.granted) {
-        notify("Camera disabled", "Grant camera access in Settings to capture photos.");
+        notify(t("submit.cameraOff"), t("submit.cameraOffBody"));
         return;
       }
       const result = await ImagePicker.launchCameraAsync({
@@ -446,7 +459,7 @@ export function InspectionWizardScreen({
     } catch (e) {
       const msg = (e as Error).message ?? "Unknown error";
       console.warn(`[InspectionWizard] takePhoto: upload FAILED for ${slotKey}: ${msg}`);
-      notify("Upload failed", `${msg}\n\nThe photo is still on your device — try again or submit later.`);
+      notify(t("submit.uploadFailed"), t("submit.uploadFailedBody", { msg }));
     } finally {
       setUploading(null);
     }
@@ -470,19 +483,19 @@ export function InspectionWizardScreen({
   // ---- Submit -------------------------------------------------------
   const submit = async () => {
     console.log("[submit] start", { platform: Platform.OS, hasUser: !!user, userId: user?.id, vehicleId: vehicle.id ?? "(new)" });
-    if (!user) { notify("Sign in required", "Your session expired — sign in again before submitting."); return; }
+    if (!user) { notify(t("submit.signInRequired"), t("submit.signInRequiredBody")); return; }
     if (!vin || !make || !model || !year) {
-      notify("Missing details", "VIN, make, model and year are required.");
+      notify(t("submit.missingDetails"), t("submit.missingDetailsBody"));
       setStep(1);
       return;
     }
     if (!startingPrice || Number(startingPrice) <= 0) {
-      notify("Starting price required", "Enter a starting price for the auction.");
+      notify(t("submit.startPriceReq"), t("submit.startPriceReqBody"));
       setStep(1);
       return;
     }
     if (reservePrice && Number(reservePrice) < Number(startingPrice)) {
-      notify("Reserve too low", "Reserve price cannot be below the starting price.");
+      notify(t("submit.reserveLow"), t("submit.reserveLowBody"));
       setStep(1);
       return;
     }
@@ -617,14 +630,14 @@ export function InspectionWizardScreen({
       // (with navigation in its button callback) silently did nothing on web —
       // that was the "doesn't submit" bug. Show a web-safe message, then
       // navigate directly.
-      notify("Inspection submitted", nextStatus === "pending_review"
-        ? "Re-submitted to the admin for review."
-        : "Saved. Tap “Submit for Listing” on your dashboard to send it to the admin.");
+      notify(t("submit.ok"), nextStatus === "pending_review"
+        ? t("submit.okResubmit")
+        : t("submit.okSaved"));
       navigation.goBack();
     } catch (e) {
       const err = e as { message?: string; details?: string; hint?: string; code?: string };
       console.error("[submit] FAILED:", JSON.stringify(err));
-      notify("Submit failed", err?.message || err?.details || err?.hint || "Unknown error — check the browser console.");
+      notify(t("submit.failed"), err?.message || err?.details || err?.hint || t("submit.failedBody"));
     } finally {
       setSubmitting(false);
     }
@@ -633,14 +646,14 @@ export function InspectionWizardScreen({
   // Discard the in-progress inspection (web-safe confirm) and leave.
   const discardInspection = useCallback(async () => {
     const ok = await confirmAsync(
-      "Discard inspection?",
-      "Abandon this inspection? Any unsaved progress on this screen will be lost.",
-      "Discard", true,
+      t("wiz.discardQ"),
+      t("wiz.discardBody"),
+      t("common.discard"), true,
     );
     if (!ok) return;
     await AsyncStorage.removeItem(autosaveKey).catch(() => {});
     navigation.goBack();
-  }, [autosaveKey, navigation]);
+  }, [autosaveKey, navigation, t]);
 
   // Header "Discard" button — abandon mid-inspection. Hidden in read-only view.
   useEffect(() => {
@@ -648,13 +661,13 @@ export function InspectionWizardScreen({
       headerRight: readOnly ? undefined : () => (
         <Pressable onPress={discardInspection} hitSlop={8} style={styles.discardHeaderBtn}>
           <Icon name="close" size={15} color={theme.colors.error} />
-          <Text style={styles.discardHeaderText}>Discard</Text>
+          <Text style={styles.discardHeaderText}>{t("nav.discard")}</Text>
         </Pressable>
       ),
     });
-  }, [navigation, discardInspection, readOnly]);
+  }, [navigation, discardInspection, readOnly, t]);
 
-  if (loading) return <Spinner label="Loading vehicle…" />;
+  if (loading) return <Spinner label={t("wiz.loadingVehicle")} />;
 
   const currentStep = STEPS.find((s) => s.n === step)!;
   const photoProgress = Object.keys(photos).length / PHOTO_SLOTS.length;
@@ -671,20 +684,20 @@ export function InspectionWizardScreen({
       // pushed off-screen when the keyboard opens.
       keyboardVerticalOffset={Platform.OS === "ios" ? 64 : 0}
     >
-      <Stepper step={step} />
+      <Stepper step={step} t={t} />
 
       {viewMode && (
         <View style={styles.viewBanner}>
           <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
             <Icon name="eye-outline" size={16} color={theme.colors.brand} />
-            <Text style={styles.viewBannerText}>Viewing inspection (read-only).</Text>
+            <Text style={styles.viewBannerText}>{t("wiz.viewing")}</Text>
           </View>
           <Pressable
             onPress={() => setViewMode(false)}
             style={({ pressed }) => [styles.editBtn, pressed && { opacity: 0.92 }]}
           >
             <Icon name="create-outline" size={14} color={theme.colors.white} />
-            <Text style={styles.editBtnText}>Edit</Text>
+            <Text style={styles.editBtnText}>{t("common.edit")}</Text>
           </Pressable>
         </View>
       )}
@@ -696,11 +709,11 @@ export function InspectionWizardScreen({
         {restoredAt && (
           <View style={styles.resumeBanner}>
             <Icon name="cloud-done-outline" size={16} color={theme.colors.brand} />
-            <Text style={styles.resumeText}>Resumed draft inspection from earlier session.</Text>
+            <Text style={styles.resumeText}>{t("wiz.resumed")}</Text>
             <Pressable
               hitSlop={8}
               onPress={async () => {
-                const ok = await confirmAsync("Discard draft?", "Clear the auto-saved fields and start fresh?", "Discard", true);
+                const ok = await confirmAsync(t("wiz.discardDraftQ"), t("wiz.discardDraftBody"), t("common.discard"), true);
                 if (!ok) return;
                 void AsyncStorage.removeItem(autosaveKey);
                 setVin(""); setMake(""); setModel(""); setYear("");
@@ -718,9 +731,9 @@ export function InspectionWizardScreen({
           <View style={styles.changesReqBanner}>
             <Icon name="warning-outline" size={16} color={theme.colors.warning} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.changesReqTitle}>Changes requested by admin</Text>
+              <Text style={styles.changesReqTitle}>{t("wiz.changesTitle")}</Text>
               {vehicle.review_notes ? <Text style={styles.changesReqText}>“{vehicle.review_notes}”</Text> : null}
-              <Text style={styles.changesReqHint}>Make the changes, then submit again to send it back for review.</Text>
+              <Text style={styles.changesReqHint}>{t("wiz.changesHint")}</Text>
             </View>
           </View>
         )}
@@ -730,27 +743,27 @@ export function InspectionWizardScreen({
             <Icon name={currentStep.icon} size={20} color={theme.colors.brand} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.stepEyebrow}>Step {step} of {STEPS.length}</Text>
-            <Text style={styles.stepTitle}>{currentStep.label}</Text>
+            <Text style={styles.stepEyebrow}>{t("wiz.stepOf", { n: step, total: STEPS.length })}</Text>
+            <Text style={styles.stepTitle}>{t(currentStep.tkey)}</Text>
           </View>
         </View>
 
         {step === 1 && (
           <Card>
-            <Field label="VIN" required><TextInput value={vin} onChangeText={setVin} autoCapitalize="characters" maxLength={17} style={styles.input} editable={!readOnly} placeholder="WBA1234567890XXXX" placeholderTextColor={theme.colors.textLight} /></Field>
+            <Field label={t("details.vin")} required><TextInput value={vin} onChangeText={setVin} autoCapitalize="characters" maxLength={17} style={styles.input} editable={!readOnly} placeholder="WBA1234567890XXXX" placeholderTextColor={theme.colors.textLight} /></Field>
             <View style={{ flexDirection: "row", gap: 10 }}>
-              <Field label="Make" required style={{ flex: 1 }}><TextInput value={make} onChangeText={setMake} style={styles.input} editable={!readOnly} placeholder="BMW" placeholderTextColor={theme.colors.textLight} /></Field>
-              <Field label="Year" required style={{ flex: 1 }}><TextInput value={year} onChangeText={setYear} keyboardType="number-pad" style={styles.input} editable={!readOnly} placeholder="2023" placeholderTextColor={theme.colors.textLight} /></Field>
+              <Field label={t("details.make")} required style={{ flex: 1 }}><TextInput value={make} onChangeText={setMake} style={styles.input} editable={!readOnly} placeholder="BMW" placeholderTextColor={theme.colors.textLight} /></Field>
+              <Field label={t("details.year")} required style={{ flex: 1 }}><TextInput value={year} onChangeText={setYear} keyboardType="number-pad" style={styles.input} editable={!readOnly} placeholder="2023" placeholderTextColor={theme.colors.textLight} /></Field>
             </View>
-            <Field label="Model" required><TextInput value={model} onChangeText={setModel} style={styles.input} editable={!readOnly} placeholder="X5" placeholderTextColor={theme.colors.textLight} /></Field>
+            <Field label={t("details.model")} required><TextInput value={model} onChangeText={setModel} style={styles.input} editable={!readOnly} placeholder="X5" placeholderTextColor={theme.colors.textLight} /></Field>
             <View style={{ flexDirection: "row", gap: 10 }}>
-              <Field label="Mileage (km)" style={{ flex: 1 }}><TextInput value={mileage} onChangeText={setMileage} keyboardType="number-pad" style={styles.input} editable={!readOnly} placeholder="42 000" placeholderTextColor={theme.colors.textLight} /></Field>
-              <Field label="Exterior color" style={{ flex: 1 }}><TextInput value={color} onChangeText={setColor} style={styles.input} editable={!readOnly} placeholder="White" placeholderTextColor={theme.colors.textLight} /></Field>
+              <Field label={t("details.mileage")} style={{ flex: 1 }}><TextInput value={mileage} onChangeText={setMileage} keyboardType="number-pad" style={styles.input} editable={!readOnly} placeholder="42 000" placeholderTextColor={theme.colors.textLight} /></Field>
+              <Field label={t("details.color")} style={{ flex: 1 }}><TextInput value={color} onChangeText={setColor} style={styles.input} editable={!readOnly} placeholder={t("details.colorExample")} placeholderTextColor={theme.colors.textLight} /></Field>
             </View>
-            <Field label="City"><TextInput value={city} onChangeText={setCity} style={styles.input} editable={!readOnly} /></Field>
+            <Field label={t("details.city")}><TextInput value={city} onChangeText={setCity} style={styles.input} editable={!readOnly} /></Field>
             <View style={{ flexDirection: "row", gap: 10 }}>
-              <Field label="Seller name" style={{ flex: 1 }}><TextInput value={sellerName} onChangeText={setSellerName} style={styles.input} editable={!readOnly} placeholder="Ahmed Al Rashid" placeholderTextColor={theme.colors.textLight} /></Field>
-              <Field label="Seller phone" style={{ flex: 1 }}><TextInput value={sellerPhone} onChangeText={setSellerPhone} keyboardType="phone-pad" style={styles.input} editable={!readOnly} placeholder="+971 50 …" placeholderTextColor={theme.colors.textLight} /></Field>
+              <Field label={t("details.sellerName")} style={{ flex: 1 }}><TextInput value={sellerName} onChangeText={setSellerName} style={styles.input} editable={!readOnly} placeholder="Ahmed Al Rashid" placeholderTextColor={theme.colors.textLight} /></Field>
+              <Field label={t("details.sellerPhone")} style={{ flex: 1 }}><TextInput value={sellerPhone} onChangeText={setSellerPhone} keyboardType="phone-pad" style={styles.input} editable={!readOnly} placeholder="+971 50 …" placeholderTextColor={theme.colors.textLight} /></Field>
             </View>
 
             {/* Live market estimate from make/model/year/mileage. */}
@@ -758,17 +771,17 @@ export function InspectionWizardScreen({
               <View style={styles.estCard}>
                 <View style={styles.estHeaderRow}>
                   <Icon name="pricetag-outline" size={14} color={theme.colors.brand} />
-                  <Text style={styles.estTitle}>Market estimate</Text>
+                  <Text style={styles.estTitle}>{t("details.marketEstimate")}</Text>
                 </View>
                 <View style={styles.estCols}>
-                  <EstCol label="Min" value={marketEstimate.minEur} />
-                  <EstCol label="Avg" value={marketEstimate.avgEur} highlight />
-                  <EstCol label="Max" value={marketEstimate.maxEur} />
+                  <EstCol label={t("details.min")} value={marketEstimate.minEur} />
+                  <EstCol label={t("details.avg")} value={marketEstimate.avgEur} highlight />
+                  <EstCol label={t("details.max")} value={marketEstimate.maxEur} />
                 </View>
                 <Text style={styles.estNote}>
                   {marketEstimate.source === "market_data"
-                    ? `Based on ${marketEstimate.dataPoints} comparable listings`
-                    : "Estimated from market data — starting price & reserve pre-filled, adjust as needed"}
+                    ? t("details.estComparable", { count: marketEstimate.dataPoints })
+                    : t("details.estReference")}
                 </Text>
               </View>
             )}
@@ -777,10 +790,10 @@ export function InspectionWizardScreen({
                 inspection. Admin can still override either value. */}
             <View style={styles.priceHeader}>
               <Icon name="pricetag-outline" size={14} color={theme.colors.brand} />
-              <Text style={styles.priceHeaderText}>Auction pricing</Text>
+              <Text style={styles.priceHeaderText}>{t("details.pricing")}</Text>
             </View>
             <View style={{ flexDirection: "row", gap: 10 }}>
-              <Field label="Starting price (EUR)" required style={{ flex: 1 }}>
+              <Field label={t("details.startingPrice")} required style={{ flex: 1 }}>
                 <TextInput
                   value={startingPrice}
                   onChangeText={(v) => { setStartingPrice(v.replace(/[^0-9]/g, "")); setPricesTouched(true); }}
@@ -791,28 +804,28 @@ export function InspectionWizardScreen({
                   placeholderTextColor={theme.colors.textLight}
                 />
               </Field>
-              <Field label="Reserve price (EUR)" style={{ flex: 1 }}>
+              <Field label={t("details.reservePrice")} style={{ flex: 1 }}>
                 <TextInput
                   value={reservePrice}
                   onChangeText={(v) => { setReservePrice(v.replace(/[^0-9]/g, "")); setPricesTouched(true); }}
                   keyboardType="number-pad"
                   style={styles.input}
                   editable={!readOnly}
-                  placeholder="optional"
+                  placeholder={t("details.optional")}
                   placeholderTextColor={theme.colors.textLight}
                 />
               </Field>
             </View>
             <Text style={styles.priceHint}>
-              Starting price kicks off the auction. Reserve is the lowest the seller will accept — admin can still override either.
+              {t("details.pricingHint")}
             </Text>
           </Card>
         )}
 
         {step === 2 && (
           <View>
-            <ProgressBar value={photoProgress} label={`${Object.keys(photos).length} of ${PHOTO_SLOTS.length} required photos captured`} />
-            <Text style={styles.tip}>Tap a tile to capture. Green check = uploaded.</Text>
+            <ProgressBar value={photoProgress} label={t("photos.progress", { done: Object.keys(photos).length, total: PHOTO_SLOTS.length })} />
+            <Text style={styles.tip}>{t("photos.tip")}</Text>
             <View style={styles.photoGrid}>
               {PHOTO_SLOTS.map((s) => (
                 <Pressable
@@ -839,7 +852,7 @@ export function InspectionWizardScreen({
                   ) : (
                     <View style={styles.photoEmpty}>
                       <Icon name="camera" size={22} color={theme.colors.textLight} />
-                      <Text style={styles.photoLabel}>{s.label}</Text>
+                      <Text style={styles.photoLabel}>{t(s.tkey)}</Text>
                       {uploading === s.key && <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginTop: 4 }} />}
                     </View>
                   )}
@@ -851,8 +864,8 @@ export function InspectionWizardScreen({
             <View style={styles.divider} />
             <View style={styles.subHeader}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.subTitle}>Additional photos</Text>
-                <Text style={styles.subTip}>Custom mods, special features, extra damage angles. Up to {MAX_OTHER_PHOTOS}.</Text>
+                <Text style={styles.subTitle}>{t("photos.additional")}</Text>
+                <Text style={styles.subTip}>{t("photos.additionalSub", { max: MAX_OTHER_PHOTOS })}</Text>
               </View>
               <View style={styles.countPill}>
                 <Text style={styles.countPillText}>{otherPhotos.length} / {MAX_OTHER_PHOTOS}</Text>
@@ -866,7 +879,7 @@ export function InspectionWizardScreen({
                 style={({ pressed }) => [styles.addPhotoBtn, pressed && { opacity: 0.92 }]}
               >
                 <Icon name="add-circle-outline" size={20} color={theme.colors.brand} />
-                <Text style={styles.addPhotoText}>Add Photo</Text>
+                <Text style={styles.addPhotoText}>{t("photos.add")}</Text>
                 {uploading?.startsWith("other-") && (
                   <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginLeft: 6 }} />
                 )}
@@ -903,16 +916,16 @@ export function InspectionWizardScreen({
 
         {step === 3 && (
           <View>
-            <Text style={styles.tip}>Walk around the car and tag every panel that has damage.</Text>
+            <Text style={styles.tip}>{t("damage.tip")}</Text>
 
             {/* Paint Thickness Test — separate from damage panels. */}
             <View style={styles.paintCard}>
               <View style={styles.paintHeader}>
                 <Icon name="color-palette-outline" size={16} color={theme.colors.brand} />
-                <Text style={styles.paintTitle}>Paint Thickness Test</Text>
+                <Text style={styles.paintTitle}>{t("damage.paintTitle")}</Text>
               </View>
               <Text style={styles.paintSub}>
-                Photograph the paint thickness gauge reading. Saved to the condition report.
+                {t("damage.paintSub")}
               </Text>
               <Pressable
                 onPress={() => takePhoto("paint_thickness", "paint")}
@@ -926,7 +939,7 @@ export function InspectionWizardScreen({
                 ) : (
                   <>
                     <Icon name="camera" size={20} color={theme.colors.brand} />
-                    <Text style={styles.paintCaptureText}>Capture reading</Text>
+                    <Text style={styles.paintCaptureText}>{t("damage.paintCapture")}</Text>
                   </>
                 )}
               </Pressable>
@@ -936,22 +949,24 @@ export function InspectionWizardScreen({
               <View style={styles.warnBanner}>
                 <Icon name="camera-outline" size={16} color={theme.colors.warning} />
                 <Text style={styles.warnText}>
-                  {damagedPanelsWithoutPhoto} damaged panel{damagedPanelsWithoutPhoto === 1 ? "" : "s"} still need a photo.
+                  {damagedPanelsWithoutPhoto === 1
+                    ? t("damage.needPhotoOne")
+                    : t("damage.needPhotoMany", { count: damagedPanelsWithoutPhoto })}
                 </Text>
               </View>
             )}
 
             {/* Simple ASCII car outline — orientation aid for the inspector. */}
             <View style={styles.carOutline}>
-              <Text style={styles.carOutlineLabel}>FRONT</Text>
+              <Text style={styles.carOutlineLabel}>{t("damage.outFront")}</Text>
               <View style={styles.carOutlineMid}>
                 <Text style={styles.carOutlineSide}>L</Text>
                 <View style={styles.carOutlineBody}>
-                  <Text style={styles.carOutlineRoof}>▢ ROOF ▢</Text>
+                  <Text style={styles.carOutlineRoof}>▢ {t("damage.outRoof")} ▢</Text>
                 </View>
                 <Text style={styles.carOutlineSide}>R</Text>
               </View>
-              <Text style={styles.carOutlineLabel}>REAR</Text>
+              <Text style={styles.carOutlineLabel}>{t("damage.outRear")}</Text>
             </View>
 
             {PANEL_SECTIONS.map((sec) => {
@@ -959,16 +974,16 @@ export function InspectionWizardScreen({
               return (
                 <View key={sec.key} style={styles.panelGroup}>
                   <View style={styles.panelGroupHeader}>
-                    <Text style={styles.panelGroupTitle}>{sec.label}</Text>
+                    <Text style={styles.panelGroupTitle}>{t(sec.tkey)}</Text>
                     {sectionDamageCount > 0 ? (
                       <View style={styles.panelGroupBadge}>
                         <Icon name="warning-outline" size={11} color={theme.colors.warning} />
-                        <Text style={styles.panelGroupBadgeText}>{sectionDamageCount} reported</Text>
+                        <Text style={styles.panelGroupBadgeText}>{t("damage.reported", { count: sectionDamageCount })}</Text>
                       </View>
                     ) : (
                       <View style={[styles.panelGroupBadge, { backgroundColor: theme.colors.successBg }]}>
                         <Icon name="checkmark-circle" size={11} color={theme.colors.success} />
-                        <Text style={[styles.panelGroupBadgeText, { color: theme.colors.success }]}>clear</Text>
+                        <Text style={[styles.panelGroupBadgeText, { color: theme.colors.success }]}>{t("damage.clear")}</Text>
                       </View>
                     )}
                   </View>
@@ -984,11 +999,11 @@ export function InspectionWizardScreen({
                         style={({ pressed }) => [styles.panelRow, pressed && { opacity: 0.95 }]}
                       >
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.panelName}>{p}</Text>
+                          <Text style={styles.panelName}>{t(panelLabelKey(p))}</Text>
                           {d?.description ? <Text style={styles.panelDesc}>{d.description}</Text> : null}
                         </View>
                         <View style={[styles.severityTag, { backgroundColor: sev.bg }]}>
-                          <Text style={[styles.severityText, { color: sev.fg }]}>{level}</Text>
+                          <Text style={[styles.severityText, { color: sev.fg }]}>{t(`damage.level.${level}`)}</Text>
                         </View>
                         {damaged && !readOnly && (
                           <Pressable
@@ -1025,6 +1040,7 @@ export function InspectionWizardScreen({
             <DamagePicker
               open={!!pickerOpen}
               panel={pickerOpen?.panel ?? ""}
+              t={t}
               initial={pickerOpen ? (damages[pickerOpen.panel] ?? { level: "none", description: "" }) : { level: "none", description: "" }}
               hasPhoto={!!(pickerOpen && damages[pickerOpen.panel]?.photoUrl)}
               onTakePhoto={() => {
@@ -1045,8 +1061,8 @@ export function InspectionWizardScreen({
 
         {step === 4 && (
           <View>
-            <ProgressBar value={docProgress} label={`${Object.keys(docs).length} of ${DOC_SLOTS.length} documents captured`} />
-            <Text style={styles.tip}>Capture each document with the camera. Make sure text is readable.</Text>
+            <ProgressBar value={docProgress} label={t("docs.progress", { done: Object.keys(docs).length, total: DOC_SLOTS.length })} />
+            <Text style={styles.tip}>{t("docs.tip")}</Text>
             <View style={styles.photoGrid}>
               {DOC_SLOTS.map((s) => (
                 <Pressable
@@ -1067,7 +1083,7 @@ export function InspectionWizardScreen({
                   ) : (
                     <View style={styles.photoEmpty}>
                       <Icon name="document-text-outline" size={22} color={theme.colors.textLight} />
-                      <Text style={styles.photoLabel}>{s.label}</Text>
+                      <Text style={styles.photoLabel}>{t(s.tkey)}</Text>
                       {uploading === s.key && <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginTop: 4 }} />}
                     </View>
                   )}
@@ -1080,19 +1096,19 @@ export function InspectionWizardScreen({
         {step === 5 && (
           <View>
             <Card>
-              <Text style={styles.reviewEyebrow}>Vehicle</Text>
+              <Text style={styles.reviewEyebrow}>{t("review.vehicle")}</Text>
               <Text style={styles.reviewTitle}>{year || "—"} {make || "—"} {model || "—"}</Text>
               <Text style={styles.reviewSub}>VIN {vin || "—"} · {formatKm(Number(mileage) || 0)} · {color || "—"}</Text>
 
               {startingPrice && (
                 <View style={styles.reviewPriceRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.reviewPriceLabel}>Starting price</Text>
+                    <Text style={styles.reviewPriceLabel}>{t("review.startingPrice")}</Text>
                     <Text style={styles.reviewPriceValue}>€{Number(startingPrice).toLocaleString("en-GB")}</Text>
                   </View>
                   {reservePrice && (
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.reviewPriceLabel}>Reserve</Text>
+                      <Text style={styles.reviewPriceLabel}>{t("review.reserve")}</Text>
                       <Text style={styles.reviewPriceValue}>€{Number(reservePrice).toLocaleString("en-GB")}</Text>
                     </View>
                   )}
@@ -1101,17 +1117,19 @@ export function InspectionWizardScreen({
             </Card>
 
             <View style={styles.summaryRow}>
-              <SummaryCard icon="camera-outline"      value={`${Object.keys(photos).length}/${PHOTO_SLOTS.length}`} label="Photos"    complete={Object.keys(photos).length === PHOTO_SLOTS.length} />
-              <SummaryCard icon="images-outline"      value={String(otherPhotos.length)}                            label="Other" />
-              <SummaryCard icon="warning-outline"     value={String(Object.values(damages).filter((d) => d.level !== "none").length)} label="Damages" />
-              <SummaryCard icon="folder-open-outline" value={`${Object.keys(docs).length}/${DOC_SLOTS.length}`}     label="Docs"      complete={Object.keys(docs).length === DOC_SLOTS.length} />
+              <SummaryCard icon="camera-outline"      value={`${Object.keys(photos).length}/${PHOTO_SLOTS.length}`} label={t("review.photos")}  complete={Object.keys(photos).length === PHOTO_SLOTS.length} />
+              <SummaryCard icon="images-outline"      value={String(otherPhotos.length)}                            label={t("review.other")} />
+              <SummaryCard icon="warning-outline"     value={String(Object.values(damages).filter((d) => d.level !== "none").length)} label={t("review.damages")} />
+              <SummaryCard icon="folder-open-outline" value={`${Object.keys(docs).length}/${DOC_SLOTS.length}`}     label={t("review.docs")}    complete={Object.keys(docs).length === DOC_SLOTS.length} />
             </View>
 
             {damagedPanelsWithoutPhoto > 0 && (
               <View style={[styles.warnBanner, { marginTop: 16 }]}>
                 <Icon name="alert-circle-outline" size={16} color={theme.colors.warning} />
                 <Text style={styles.warnText}>
-                  {damagedPanelsWithoutPhoto} damaged panel{damagedPanelsWithoutPhoto === 1 ? "" : "s"} missing a photo. You can still submit, but buyers see only the severity tag.
+                  {damagedPanelsWithoutPhoto === 1
+                    ? t("review.missingOne")
+                    : t("review.missingMany", { count: damagedPanelsWithoutPhoto })}
                 </Text>
               </View>
             )}
@@ -1121,16 +1139,16 @@ export function InspectionWizardScreen({
             <View style={[styles.card, { marginTop: 16 }]}>
               <View style={styles.priceHeader}>
                 <Icon name="create-outline" size={14} color={theme.colors.brand} />
-                <Text style={styles.priceHeaderText}>Inspector notes</Text>
+                <Text style={styles.priceHeaderText}>{t("review.notes")}</Text>
               </View>
               {readOnly ? (
-                <Text style={styles.reviewSub}>{notes.trim() || "No notes added."}</Text>
+                <Text style={styles.reviewSub}>{notes.trim() || t("review.noNotes")}</Text>
               ) : (
                 <TextInput
                   value={notes}
                   onChangeText={setNotes}
                   multiline
-                  placeholder="Overall condition, mechanical notes, anything buyers should know…"
+                  placeholder={t("review.notesPlaceholder")}
                   placeholderTextColor={theme.colors.textLight}
                   style={[styles.input, { height: 96, paddingTop: 10, textAlignVertical: "top" }]}
                 />
@@ -1147,7 +1165,7 @@ export function InspectionWizardScreen({
                 >
                   {submitting && <ActivityIndicator color={theme.colors.white} />}
                   <Icon name="checkmark-done-outline" size={20} color={theme.colors.white} />
-                  <Text style={styles.submitText}>{submitting ? "Submitting…" : "Submit inspection"}</Text>
+                  <Text style={styles.submitText}>{submitting ? t("review.submitting") : t("review.submit")}</Text>
                 </LinearGradient>
               </Pressable>
             )}
@@ -1157,14 +1175,14 @@ export function InspectionWizardScreen({
 
       {/* Step nav */}
       <View style={styles.navBar}>
-        <Button label="Back" variant="outline" onPress={() => step === 1 ? navigation.goBack() : setStep((s) => s - 1)} style={{ flex: 1 }} />
-        {step < STEPS.length && <Button label="Next" onPress={() => setStep((s) => Math.min(STEPS.length, s + 1))} style={{ flex: 1 }} />}
+        <Button label={t("common.back")} variant="outline" onPress={() => step === 1 ? navigation.goBack() : setStep((s) => s - 1)} style={{ flex: 1 }} />
+        {step < STEPS.length && <Button label={t("common.next")} onPress={() => setStep((s) => Math.min(STEPS.length, s + 1))} style={{ flex: 1 }} />}
       </View>
     </KeyboardAvoidingView>
   );
 }
 
-function Stepper({ step }: { step: number }) {
+function Stepper({ step, t }: { step: number; t: TFunc }) {
   const pct = ((step - 1) / (STEPS.length - 1)) * 100;
   return (
     <View style={styles.stepperWrap}>
@@ -1189,7 +1207,7 @@ function Stepper({ step }: { step: number }) {
                   <Text style={[styles.stepDotText, active && { color: theme.colors.white }]}>{s.n}</Text>
                 )}
               </View>
-              <Text style={[styles.stepLabel, active && { color: theme.colors.brand, fontWeight: "800" }]}>{s.label}</Text>
+              <Text style={[styles.stepLabel, active && { color: theme.colors.brand, fontWeight: "800" }]}>{t(s.tkey)}</Text>
             </View>
           );
         })}
@@ -1255,10 +1273,11 @@ function damageStyle(level: DamageLevel) {
 }
 
 function DamagePicker({
-  open, panel, initial, hasPhoto, onClose, onSave, onTakePhoto,
+  open, panel, t, initial, hasPhoto, onClose, onSave, onTakePhoto,
 }: {
   open: boolean;
   panel: string;
+  t: TFunc;
   initial: { level: DamageLevel; description: string };
   hasPhoto: boolean;
   onClose: () => void;
@@ -1273,8 +1292,8 @@ function DamagePicker({
     <Modal transparent animationType="slide" onRequestClose={onClose} visible>
       <View style={styles.modalScrim}>
         <View style={styles.modalCard}>
-          <Text style={styles.modalTitle}>{panel}</Text>
-          <Text style={styles.modalSub}>Set damage severity and add a quick note.</Text>
+          <Text style={styles.modalTitle}>{panel ? t(panelLabelKey(panel)) : ""}</Text>
+          <Text style={styles.modalSub}>{t("damage.pickerSub")}</Text>
 
           <View style={styles.levelRow}>
             {DAMAGE_LEVELS.map((l) => {
@@ -1286,7 +1305,7 @@ function DamagePicker({
                   onPress={() => setLevel(l)}
                   style={[styles.levelBtn, { backgroundColor: sty.bg, borderColor: selected ? sty.fg : "transparent", borderWidth: 2 }]}
                 >
-                  <Text style={[styles.levelText, { color: sty.fg }]}>{l}</Text>
+                  <Text style={[styles.levelText, { color: sty.fg }]}>{t(`damage.level.${l}`)}</Text>
                 </Pressable>
               );
             })}
@@ -1296,7 +1315,7 @@ function DamagePicker({
             value={desc}
             onChangeText={setDesc}
             multiline
-            placeholder="e.g. 12 cm scuff, no paint break"
+            placeholder={t("damage.pickerPlaceholder")}
             placeholderTextColor={theme.colors.textLight}
             style={[styles.input, { height: 80, paddingTop: 10, textAlignVertical: "top" }]}
           />
@@ -1308,14 +1327,14 @@ function DamagePicker({
             >
               <Icon name={hasPhoto ? "camera" : "camera-outline"} size={18} color={theme.colors.brand} />
               <Text style={styles.modalPhotoText}>
-                {hasPhoto ? "Retake damage photo" : "Take damage photo"}
+                {hasPhoto ? t("damage.retakePhoto") : t("damage.takePhoto")}
               </Text>
             </Pressable>
           )}
 
           <View style={{ flexDirection: "row", gap: 10, marginTop: 14 }}>
-            <Button label="Cancel" variant="outline" onPress={onClose} style={{ flex: 1 }} />
-            <Button label="Save" onPress={() => onSave(level, desc)} style={{ flex: 1 }} />
+            <Button label={t("common.cancel")} variant="outline" onPress={onClose} style={{ flex: 1 }} />
+            <Button label={t("common.save")} onPress={() => onSave(level, desc)} style={{ flex: 1 }} />
           </View>
         </View>
       </View>

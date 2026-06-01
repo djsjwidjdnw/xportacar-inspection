@@ -1,0 +1,957 @@
+// Lightweight i18n for the inspector app — mirrors the buyer app
+// (xportacar-mobile) setup exactly:
+// - Strings live in this file as four dictionaries (en/de/ar/fr).
+// - The active locale is read from the signed-in inspector's
+//   profile.language via I18nProvider in App.tsx, with a SecureStore
+//   fallback so the choice survives sign-out.
+// - setLocale updates state synchronously (instant re-render across all
+//   screens) AND persists to both SecureStore and the user profile.
+// - Arabic flips layout to RTL via react-native's I18nManager.
+//
+// IMPORTANT: only USER-FACING display text is translated. Values written
+// to the database (damage panel names, severity levels, photo/document
+// captions) and outbound admin notifications stay canonical English so
+// the web/admin/buyer apps keep reading a single stable language.
+
+import { createContext, createElement, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { I18nManager } from "react-native";
+import * as SecureStore from "expo-secure-store";
+import { supabase } from "./supabase";
+
+export type Locale = "en" | "de" | "ar" | "fr";
+export const SUPPORTED: Locale[] = ["en", "de", "ar", "fr"];
+const STORE_KEY = "xpc_locale";
+
+// Display metadata for the language switcher — same flags/labels as the buyer app.
+export const LANG_LABELS: Record<Locale, { label: string; flag: string }> = {
+  en: { label: "English",  flag: "🇬🇧" },
+  de: { label: "Deutsch",  flag: "🇩🇪" },
+  fr: { label: "Français", flag: "🇫🇷" },
+  ar: { label: "العربية",  flag: "🇦🇪" },
+};
+
+type Dict = Record<string, string>;
+
+const en: Dict = {
+  // Stack header / nav
+  "nav.inspection": "Inspection",
+  "nav.discard":    "Discard",
+
+  // Common actions
+  "common.back":    "Back",
+  "common.next":    "Next",
+  "common.cancel":  "Cancel",
+  "common.save":    "Save",
+  "common.discard": "Discard",
+  "common.delete":  "Delete",
+  "common.submit":  "Submit",
+  "common.edit":    "Edit",
+
+  // Login
+  "auth.portal":       "Inspector Portal",
+  "auth.signIn":       "Sign in",
+  "auth.signInBlurb":  "Use the credentials issued by your XportACar coordinator to start an inspection.",
+  "auth.email":        "Email",
+  "auth.password":     "Password",
+  "auth.signingIn":    "Signing in…",
+  "auth.missingInfo":  "Missing info",
+  "auth.missingBody":  "Enter email and password.",
+  "auth.signInFailed": "Sign in failed",
+  "auth.foot":         "Need access? Contact your coordinator.",
+
+  // Dashboard
+  "dash.portal":            "INSPECTOR PORTAL",
+  "dash.greetingMorning":   "Good morning",
+  "dash.greetingAfternoon": "Good afternoon",
+  "dash.greetingEvening":   "Good evening",
+  "dash.assigned":          "Assigned",
+  "dash.completed":         "Completed",
+  "dash.loading":           "Loading inspections…",
+  "dash.newTitle":          "Start a new inspection",
+  "dash.newSub":            "Walk-in vehicle? Begin a fresh report from scratch.",
+  "dash.sectionDrafts":     "Drafts in progress",
+  "dash.sectionChanges":    "Changes requested",
+  "dash.sectionAssigned":   "Assigned to you",
+  "dash.sectionCompleted":  "Completed inspections",
+  "dash.noAssignedTitle":   "No vehicles assigned",
+  "dash.noAssignedBody":    "Ask an admin to assign a vehicle to you, or start a new walk-in inspection.",
+  "dash.noCompletedTitle":  "No completed inspections yet",
+  "dash.noCompletedBody":   "Once you submit your first inspection, it will appear here for your records.",
+  "dash.lastEdited":        "Last edited {when}",
+  "dash.stepN":             "Step {n}",
+  "dash.deleteDraft":       "Delete Draft",
+  "dash.changesCta":        "Tap to make changes & re-submit →",
+  "dash.changesDefault":    "The admin requested changes before listing.",
+  "dash.scheduled":         "Scheduled",
+  "dash.inReview":          "in review",
+  "dash.photosCount":       "{count} photos",
+  "dash.submitForListing":  "Submit for Listing",
+  "dash.untitledDraft":     "Untitled draft",
+  "dash.language":          "Language",
+  // Relative time
+  "dash.justNow":   "just now",
+  "dash.minAgo":    "{n}m ago",
+  "dash.hourAgo":   "{n}h ago",
+  "dash.yesterday": "yesterday",
+  "dash.daysAgo":   "{n}d ago",
+  // Dashboard dialogs
+  "dash.deleteDraftQ":    "Delete draft?",
+  "dash.deleteDraftBody": "Delete this draft? This cannot be undone.",
+  "dash.submitQ":         "Submit for listing?",
+  "dash.submitBody":      "Send {summary} to the admin team to review and list.",
+  "dash.submitErr":       "Couldn't submit",
+  "dash.submitOk":        "Submitted for listing",
+  "dash.submitOkBody":    "The admin team will review and publish it.",
+
+  // Wizard steps
+  "step.details":   "Details",
+  "step.photos":    "Photos",
+  "step.damage":    "Damage",
+  "step.documents": "Documents",
+  "step.review":    "Review",
+
+  // Wizard chrome
+  "wiz.stepOf":          "Step {n} of {total}",
+  "wiz.viewing":         "Viewing inspection (read-only).",
+  "wiz.resumed":         "Resumed draft inspection from earlier session.",
+  "wiz.discardDraftQ":   "Discard draft?",
+  "wiz.discardDraftBody":"Clear the auto-saved fields and start fresh?",
+  "wiz.changesTitle":    "Changes requested by admin",
+  "wiz.changesHint":     "Make the changes, then submit again to send it back for review.",
+  "wiz.loadingVehicle":  "Loading vehicle…",
+  "wiz.discardQ":        "Discard inspection?",
+  "wiz.discardBody":     "Abandon this inspection? Any unsaved progress on this screen will be lost.",
+
+  // Step 1 — Details
+  "details.vin":           "VIN",
+  "details.make":          "Make",
+  "details.year":          "Year",
+  "details.model":         "Model",
+  "details.mileage":       "Mileage (km)",
+  "details.color":         "Exterior color",
+  "details.colorExample":  "White",
+  "details.city":          "City",
+  "details.sellerName":    "Seller name",
+  "details.sellerPhone":   "Seller phone",
+  "details.marketEstimate":"Market estimate",
+  "details.min":           "Min",
+  "details.avg":           "Avg",
+  "details.max":           "Max",
+  "details.estComparable": "Based on {count} comparable listings",
+  "details.estReference":  "Estimated from market data — starting price & reserve pre-filled, adjust as needed",
+  "details.pricing":       "Auction pricing",
+  "details.startingPrice": "Starting price (EUR)",
+  "details.reservePrice":  "Reserve price (EUR)",
+  "details.optional":      "optional",
+  "details.pricingHint":   "Starting price kicks off the auction. Reserve is the lowest the seller will accept — admin can still override either.",
+
+  // Step 2 — Photos
+  "photos.progress":      "{done} of {total} required photos captured",
+  "photos.tip":           "Tap a tile to capture. Green check = uploaded.",
+  "photos.additional":    "Additional photos",
+  "photos.additionalSub": "Custom mods, special features, extra damage angles. Up to {max}.",
+  "photos.add":           "Add Photo",
+  "photos.slot.front":          "Front",
+  "photos.slot.rear":           "Rear",
+  "photos.slot.left":           "Left side",
+  "photos.slot.right":          "Right side",
+  "photos.slot.front_left":     "Front-left",
+  "photos.slot.front_right":    "Front-right",
+  "photos.slot.rear_left":      "Rear-left",
+  "photos.slot.rear_right":     "Rear-right",
+  "photos.slot.interior_front": "Interior front",
+  "photos.slot.interior_rear":  "Interior rear",
+  "photos.slot.engine":         "Engine bay",
+  "photos.slot.trunk":          "Trunk",
+
+  // Step 3 — Damage
+  "damage.tip":           "Walk around the car and tag every panel that has damage.",
+  "damage.paintTitle":    "Paint Thickness Test",
+  "damage.paintSub":      "Photograph the paint thickness gauge reading. Saved to the condition report.",
+  "damage.paintCapture":  "Capture reading",
+  "damage.needPhotoOne":  "1 damaged panel still needs a photo.",
+  "damage.needPhotoMany": "{count} damaged panels still need a photo.",
+  "damage.reported":      "{count} reported",
+  "damage.clear":         "clear",
+  "damage.outFront":      "FRONT",
+  "damage.outRear":       "REAR",
+  "damage.outRoof":       "ROOF",
+  "damage.pickerSub":     "Set damage severity and add a quick note.",
+  "damage.pickerPlaceholder": "e.g. 12 cm scuff, no paint break",
+  "damage.takePhoto":     "Take damage photo",
+  "damage.retakePhoto":   "Retake damage photo",
+  // Damage sections
+  "damage.section.front": "Front",
+  "damage.section.left":  "Left side",
+  "damage.section.right": "Right side",
+  "damage.section.rear":  "Rear",
+  "damage.section.top":   "Top",
+  // Damage panels (display only — DB stores the English name)
+  "damage.panel.front_bumper":    "Front bumper",
+  "damage.panel.hood":            "Hood",
+  "damage.panel.windshield":      "Windshield",
+  "damage.panel.left_front_door": "Left front door",
+  "damage.panel.left_rear_door":  "Left rear door",
+  "damage.panel.left_fender":     "Left fender",
+  "damage.panel.right_front_door":"Right front door",
+  "damage.panel.right_rear_door": "Right rear door",
+  "damage.panel.right_fender":    "Right fender",
+  "damage.panel.rear_bumper":     "Rear bumper",
+  "damage.panel.trunk_lid":       "Trunk lid",
+  "damage.panel.roof":            "Roof",
+  // Damage levels (display only — DB stores the English level)
+  "damage.level.none":     "none",
+  "damage.level.cosmetic": "cosmetic",
+  "damage.level.minor":    "minor",
+  "damage.level.moderate": "moderate",
+  "damage.level.major":    "major",
+
+  // Step 4 — Documents
+  "docs.progress":            "{done} of {total} documents captured",
+  "docs.tip":                 "Capture each document with the camera. Make sure text is readable.",
+  "docs.slot.registration":   "Registration",
+  "docs.slot.service_book":   "Service book",
+  "docs.slot.insurance":      "Insurance docs",
+
+  // Step 5 — Review
+  "review.vehicle":       "Vehicle",
+  "review.startingPrice": "Starting price",
+  "review.reserve":       "Reserve",
+  "review.photos":        "Photos",
+  "review.other":         "Other",
+  "review.damages":       "Damages",
+  "review.docs":          "Docs",
+  "review.missingOne":    "1 damaged panel missing a photo. You can still submit, but buyers see only the severity tag.",
+  "review.missingMany":   "{count} damaged panels missing a photo. You can still submit, but buyers see only the severity tag.",
+  "review.notes":         "Inspector notes",
+  "review.notesPlaceholder": "Overall condition, mechanical notes, anything buyers should know…",
+  "review.noNotes":       "No notes added.",
+  "review.submit":        "Submit inspection",
+  "review.submitting":    "Submitting…",
+
+  // Submit / capture messages
+  "submit.signInRequired":     "Sign in required",
+  "submit.signInRequiredBody": "Your session expired — sign in again before submitting.",
+  "submit.missingDetails":     "Missing details",
+  "submit.missingDetailsBody": "VIN, make, model and year are required.",
+  "submit.startPriceReq":      "Starting price required",
+  "submit.startPriceReqBody":  "Enter a starting price for the auction.",
+  "submit.reserveLow":         "Reserve too low",
+  "submit.reserveLowBody":     "Reserve price cannot be below the starting price.",
+  "submit.cameraOff":          "Camera disabled",
+  "submit.cameraOffBody":      "Grant camera access in Settings to capture photos.",
+  "submit.uploadFailed":       "Upload failed",
+  "submit.uploadFailedBody":   "{msg}\n\nThe photo is still on your device — try again or submit later.",
+  "submit.ok":                 "Inspection submitted",
+  "submit.okResubmit":         "Re-submitted to the admin for review.",
+  "submit.okSaved":            "Saved. Tap “Submit for Listing” on your dashboard to send it to the admin.",
+  "submit.failed":             "Submit failed",
+  "submit.failedBody":         "Unknown error — check the browser console.",
+};
+
+const de: Dict = {
+  "nav.inspection": "Inspektion",
+  "nav.discard":    "Verwerfen",
+
+  "common.back":    "Zurück",
+  "common.next":    "Weiter",
+  "common.cancel":  "Abbrechen",
+  "common.save":    "Speichern",
+  "common.discard": "Verwerfen",
+  "common.delete":  "Löschen",
+  "common.submit":  "Absenden",
+  "common.edit":    "Bearbeiten",
+
+  "auth.portal":       "Inspektoren-Portal",
+  "auth.signIn":       "Anmelden",
+  "auth.signInBlurb":  "Verwende die von deinem XportACar-Koordinator ausgestellten Zugangsdaten, um eine Inspektion zu starten.",
+  "auth.email":        "E-Mail",
+  "auth.password":     "Passwort",
+  "auth.signingIn":    "Anmelden…",
+  "auth.missingInfo":  "Angaben fehlen",
+  "auth.missingBody":  "E-Mail und Passwort eingeben.",
+  "auth.signInFailed": "Anmeldung fehlgeschlagen",
+  "auth.foot":         "Kein Zugang? Wende dich an deinen Koordinator.",
+
+  "dash.portal":            "INSPEKTOREN-PORTAL",
+  "dash.greetingMorning":   "Guten Morgen",
+  "dash.greetingAfternoon": "Guten Tag",
+  "dash.greetingEvening":   "Guten Abend",
+  "dash.assigned":          "Zugewiesen",
+  "dash.completed":         "Abgeschlossen",
+  "dash.loading":           "Inspektionen werden geladen…",
+  "dash.newTitle":          "Neue Inspektion starten",
+  "dash.newSub":            "Spontanes Fahrzeug? Beginne einen neuen Bericht von Grund auf.",
+  "dash.sectionDrafts":     "Entwürfe in Arbeit",
+  "dash.sectionChanges":    "Änderungen angefordert",
+  "dash.sectionAssigned":   "Dir zugewiesen",
+  "dash.sectionCompleted":  "Abgeschlossene Inspektionen",
+  "dash.noAssignedTitle":   "Keine Fahrzeuge zugewiesen",
+  "dash.noAssignedBody":    "Bitte einen Admin, dir ein Fahrzeug zuzuweisen, oder starte eine neue spontane Inspektion.",
+  "dash.noCompletedTitle":  "Noch keine abgeschlossenen Inspektionen",
+  "dash.noCompletedBody":   "Sobald du deine erste Inspektion einreichst, erscheint sie hier für deine Unterlagen.",
+  "dash.lastEdited":        "Zuletzt bearbeitet {when}",
+  "dash.stepN":             "Schritt {n}",
+  "dash.deleteDraft":       "Entwurf löschen",
+  "dash.changesCta":        "Tippen, um Änderungen vorzunehmen & erneut einzureichen →",
+  "dash.changesDefault":    "Der Admin hat vor der Listung Änderungen angefordert.",
+  "dash.scheduled":         "Geplant",
+  "dash.inReview":          "in Prüfung",
+  "dash.photosCount":       "{count} Fotos",
+  "dash.submitForListing":  "Zur Listung einreichen",
+  "dash.untitledDraft":     "Unbenannter Entwurf",
+  "dash.language":          "Sprache",
+  "dash.justNow":   "gerade eben",
+  "dash.minAgo":    "vor {n} Min.",
+  "dash.hourAgo":   "vor {n} Std.",
+  "dash.yesterday": "gestern",
+  "dash.daysAgo":   "vor {n} T.",
+  "dash.deleteDraftQ":    "Entwurf löschen?",
+  "dash.deleteDraftBody": "Diesen Entwurf löschen? Dies kann nicht rückgängig gemacht werden.",
+  "dash.submitQ":         "Zur Listung einreichen?",
+  "dash.submitBody":      "{summary} an das Admin-Team zur Prüfung und Listung senden.",
+  "dash.submitErr":       "Einreichen fehlgeschlagen",
+  "dash.submitOk":        "Zur Listung eingereicht",
+  "dash.submitOkBody":    "Das Admin-Team prüft und veröffentlicht es.",
+
+  "step.details":   "Details",
+  "step.photos":    "Fotos",
+  "step.damage":    "Schäden",
+  "step.documents": "Dokumente",
+  "step.review":    "Überprüfung",
+
+  "wiz.stepOf":          "Schritt {n} von {total}",
+  "wiz.viewing":         "Inspektion ansehen (schreibgeschützt).",
+  "wiz.resumed":         "Entwurf der Inspektion aus einer früheren Sitzung fortgesetzt.",
+  "wiz.discardDraftQ":   "Entwurf verwerfen?",
+  "wiz.discardDraftBody":"Die automatisch gespeicherten Felder leeren und neu beginnen?",
+  "wiz.changesTitle":    "Vom Admin angeforderte Änderungen",
+  "wiz.changesHint":     "Nimm die Änderungen vor und reiche es dann erneut zur Prüfung ein.",
+  "wiz.loadingVehicle":  "Fahrzeug wird geladen…",
+  "wiz.discardQ":        "Inspektion verwerfen?",
+  "wiz.discardBody":     "Diese Inspektion abbrechen? Nicht gespeicherte Änderungen auf diesem Bildschirm gehen verloren.",
+
+  "details.vin":           "VIN",
+  "details.make":          "Marke",
+  "details.year":          "Jahr",
+  "details.model":         "Modell",
+  "details.mileage":       "Kilometerstand (km)",
+  "details.color":         "Außenfarbe",
+  "details.colorExample":  "Weiß",
+  "details.city":          "Stadt",
+  "details.sellerName":    "Name des Verkäufers",
+  "details.sellerPhone":   "Telefon des Verkäufers",
+  "details.marketEstimate":"Marktschätzung",
+  "details.min":           "Min",
+  "details.avg":           "Ø",
+  "details.max":           "Max",
+  "details.estComparable": "Basierend auf {count} vergleichbaren Angeboten",
+  "details.estReference":  "Aus Marktdaten geschätzt — Startpreis & Reserve vorausgefüllt, nach Bedarf anpassen",
+  "details.pricing":       "Auktionspreise",
+  "details.startingPrice": "Startpreis (EUR)",
+  "details.reservePrice":  "Reservepreis (EUR)",
+  "details.optional":      "optional",
+  "details.pricingHint":   "Der Startpreis eröffnet die Auktion. Die Reserve ist der niedrigste Preis, den der Verkäufer akzeptiert — der Admin kann beides überschreiben.",
+
+  "photos.progress":      "{done} von {total} erforderlichen Fotos aufgenommen",
+  "photos.tip":           "Tippe auf eine Kachel, um aufzunehmen. Grünes Häkchen = hochgeladen.",
+  "photos.additional":    "Zusätzliche Fotos",
+  "photos.additionalSub": "Sonderausstattung, Besonderheiten, weitere Schadenswinkel. Bis zu {max}.",
+  "photos.add":           "Foto hinzufügen",
+  "photos.slot.front":          "Vorne",
+  "photos.slot.rear":           "Hinten",
+  "photos.slot.left":           "Linke Seite",
+  "photos.slot.right":          "Rechte Seite",
+  "photos.slot.front_left":     "Vorne links",
+  "photos.slot.front_right":    "Vorne rechts",
+  "photos.slot.rear_left":      "Hinten links",
+  "photos.slot.rear_right":     "Hinten rechts",
+  "photos.slot.interior_front": "Innenraum vorne",
+  "photos.slot.interior_rear":  "Innenraum hinten",
+  "photos.slot.engine":         "Motorraum",
+  "photos.slot.trunk":          "Kofferraum",
+
+  "damage.tip":           "Geh um das Fahrzeug herum und markiere jedes Teil mit Schäden.",
+  "damage.paintTitle":    "Lackschichtdicken-Test",
+  "damage.paintSub":      "Fotografiere die Anzeige des Lackschichtdicken-Messgeräts. Wird im Zustandsbericht gespeichert.",
+  "damage.paintCapture":  "Messwert aufnehmen",
+  "damage.needPhotoOne":  "1 beschädigtes Teil benötigt noch ein Foto.",
+  "damage.needPhotoMany": "{count} beschädigte Teile benötigen noch ein Foto.",
+  "damage.reported":      "{count} gemeldet",
+  "damage.clear":         "in Ordnung",
+  "damage.outFront":      "VORNE",
+  "damage.outRear":       "HINTEN",
+  "damage.outRoof":       "DACH",
+  "damage.pickerSub":     "Schweregrad festlegen und eine kurze Notiz hinzufügen.",
+  "damage.pickerPlaceholder": "z. B. 12 cm Kratzer, kein Lackbruch",
+  "damage.takePhoto":     "Schadensfoto aufnehmen",
+  "damage.retakePhoto":   "Schadensfoto erneut aufnehmen",
+  "damage.section.front": "Vorne",
+  "damage.section.left":  "Linke Seite",
+  "damage.section.right": "Rechte Seite",
+  "damage.section.rear":  "Hinten",
+  "damage.section.top":   "Oben",
+  "damage.panel.front_bumper":    "Vordere Stoßstange",
+  "damage.panel.hood":            "Motorhaube",
+  "damage.panel.windshield":      "Windschutzscheibe",
+  "damage.panel.left_front_door": "Linke vordere Tür",
+  "damage.panel.left_rear_door":  "Linke hintere Tür",
+  "damage.panel.left_fender":     "Linker Kotflügel",
+  "damage.panel.right_front_door":"Rechte vordere Tür",
+  "damage.panel.right_rear_door": "Rechte hintere Tür",
+  "damage.panel.right_fender":    "Rechter Kotflügel",
+  "damage.panel.rear_bumper":     "Hintere Stoßstange",
+  "damage.panel.trunk_lid":       "Kofferraumdeckel",
+  "damage.panel.roof":            "Dach",
+  "damage.level.none":     "keine",
+  "damage.level.cosmetic": "kosmetisch",
+  "damage.level.minor":    "gering",
+  "damage.level.moderate": "mittel",
+  "damage.level.major":    "schwer",
+
+  "docs.progress":            "{done} von {total} Dokumenten erfasst",
+  "docs.tip":                 "Erfasse jedes Dokument mit der Kamera. Achte darauf, dass der Text lesbar ist.",
+  "docs.slot.registration":   "Zulassung",
+  "docs.slot.service_book":   "Serviceheft",
+  "docs.slot.insurance":      "Versicherungsunterlagen",
+
+  "review.vehicle":       "Fahrzeug",
+  "review.startingPrice": "Startpreis",
+  "review.reserve":       "Reserve",
+  "review.photos":        "Fotos",
+  "review.other":         "Sonstige",
+  "review.damages":       "Schäden",
+  "review.docs":          "Dok.",
+  "review.missingOne":    "1 beschädigtem Teil fehlt ein Foto. Du kannst trotzdem einreichen, aber Käufer sehen nur den Schweregrad.",
+  "review.missingMany":   "{count} beschädigten Teilen fehlt ein Foto. Du kannst trotzdem einreichen, aber Käufer sehen nur den Schweregrad.",
+  "review.notes":         "Inspektor-Notizen",
+  "review.notesPlaceholder": "Gesamtzustand, mechanische Hinweise, alles, was Käufer wissen sollten…",
+  "review.noNotes":       "Keine Notizen hinzugefügt.",
+  "review.submit":        "Inspektion einreichen",
+  "review.submitting":    "Wird eingereicht…",
+
+  "submit.signInRequired":     "Anmeldung erforderlich",
+  "submit.signInRequiredBody": "Deine Sitzung ist abgelaufen — melde dich vor dem Einreichen erneut an.",
+  "submit.missingDetails":     "Angaben fehlen",
+  "submit.missingDetailsBody": "VIN, Marke, Modell und Jahr sind erforderlich.",
+  "submit.startPriceReq":      "Startpreis erforderlich",
+  "submit.startPriceReqBody":  "Gib einen Startpreis für die Auktion ein.",
+  "submit.reserveLow":         "Reserve zu niedrig",
+  "submit.reserveLowBody":     "Der Reservepreis darf nicht unter dem Startpreis liegen.",
+  "submit.cameraOff":          "Kamera deaktiviert",
+  "submit.cameraOffBody":      "Erteile in den Einstellungen Kamerazugriff, um Fotos aufzunehmen.",
+  "submit.uploadFailed":       "Upload fehlgeschlagen",
+  "submit.uploadFailedBody":   "{msg}\n\nDas Foto ist noch auf deinem Gerät — versuche es erneut oder reiche es später ein.",
+  "submit.ok":                 "Inspektion eingereicht",
+  "submit.okResubmit":         "Erneut zur Prüfung an den Admin gesendet.",
+  "submit.okSaved":            "Gespeichert. Tippe auf deinem Dashboard auf „Zur Listung einreichen“, um es an den Admin zu senden.",
+  "submit.failed":             "Einreichen fehlgeschlagen",
+  "submit.failedBody":         "Unbekannter Fehler — prüfe die Browser-Konsole.",
+};
+
+const fr: Dict = {
+  "nav.inspection": "Inspection",
+  "nav.discard":    "Abandonner",
+
+  "common.back":    "Retour",
+  "common.next":    "Suivant",
+  "common.cancel":  "Annuler",
+  "common.save":    "Enregistrer",
+  "common.discard": "Abandonner",
+  "common.delete":  "Supprimer",
+  "common.submit":  "Soumettre",
+  "common.edit":    "Modifier",
+
+  "auth.portal":       "Portail inspecteur",
+  "auth.signIn":       "Se connecter",
+  "auth.signInBlurb":  "Utilisez les identifiants fournis par votre coordinateur XportACar pour démarrer une inspection.",
+  "auth.email":        "E-mail",
+  "auth.password":     "Mot de passe",
+  "auth.signingIn":    "Connexion…",
+  "auth.missingInfo":  "Informations manquantes",
+  "auth.missingBody":  "Saisissez l'e-mail et le mot de passe.",
+  "auth.signInFailed": "Échec de la connexion",
+  "auth.foot":         "Besoin d'un accès ? Contactez votre coordinateur.",
+
+  "dash.portal":            "PORTAIL INSPECTEUR",
+  "dash.greetingMorning":   "Bonjour",
+  "dash.greetingAfternoon": "Bon après-midi",
+  "dash.greetingEvening":   "Bonsoir",
+  "dash.assigned":          "Assignées",
+  "dash.completed":         "Terminées",
+  "dash.loading":           "Chargement des inspections…",
+  "dash.newTitle":          "Démarrer une nouvelle inspection",
+  "dash.newSub":            "Véhicule sans rendez-vous ? Commencez un nouveau rapport de zéro.",
+  "dash.sectionDrafts":     "Brouillons en cours",
+  "dash.sectionChanges":    "Modifications demandées",
+  "dash.sectionAssigned":   "Qui vous sont assignées",
+  "dash.sectionCompleted":  "Inspections terminées",
+  "dash.noAssignedTitle":   "Aucun véhicule assigné",
+  "dash.noAssignedBody":    "Demandez à un admin de vous assigner un véhicule, ou démarrez une nouvelle inspection sans rendez-vous.",
+  "dash.noCompletedTitle":  "Aucune inspection terminée pour l'instant",
+  "dash.noCompletedBody":   "Dès que vous soumettez votre première inspection, elle apparaîtra ici pour vos archives.",
+  "dash.lastEdited":        "Modifié {when}",
+  "dash.stepN":             "Étape {n}",
+  "dash.deleteDraft":       "Supprimer le brouillon",
+  "dash.changesCta":        "Touchez pour modifier & resoumettre →",
+  "dash.changesDefault":    "L'admin a demandé des modifications avant la mise en vente.",
+  "dash.scheduled":         "Programmée",
+  "dash.inReview":          "en révision",
+  "dash.photosCount":       "{count} photos",
+  "dash.submitForListing":  "Soumettre pour mise en vente",
+  "dash.untitledDraft":     "Brouillon sans titre",
+  "dash.language":          "Langue",
+  "dash.justNow":   "à l'instant",
+  "dash.minAgo":    "il y a {n} min",
+  "dash.hourAgo":   "il y a {n} h",
+  "dash.yesterday": "hier",
+  "dash.daysAgo":   "il y a {n} j",
+  "dash.deleteDraftQ":    "Supprimer le brouillon ?",
+  "dash.deleteDraftBody": "Supprimer ce brouillon ? Cette action est irréversible.",
+  "dash.submitQ":         "Soumettre pour mise en vente ?",
+  "dash.submitBody":      "Envoyer {summary} à l'équipe admin pour révision et mise en vente.",
+  "dash.submitErr":       "Échec de la soumission",
+  "dash.submitOk":        "Soumis pour mise en vente",
+  "dash.submitOkBody":    "L'équipe admin va le réviser et le publier.",
+
+  "step.details":   "Détails",
+  "step.photos":    "Photos",
+  "step.damage":    "Dommages",
+  "step.documents": "Documents",
+  "step.review":    "Vérification",
+
+  "wiz.stepOf":          "Étape {n} sur {total}",
+  "wiz.viewing":         "Consultation de l'inspection (lecture seule).",
+  "wiz.resumed":         "Brouillon d'inspection repris d'une session précédente.",
+  "wiz.discardDraftQ":   "Abandonner le brouillon ?",
+  "wiz.discardDraftBody":"Effacer les champs enregistrés automatiquement et recommencer ?",
+  "wiz.changesTitle":    "Modifications demandées par l'admin",
+  "wiz.changesHint":     "Effectuez les modifications, puis soumettez à nouveau pour renvoyer en révision.",
+  "wiz.loadingVehicle":  "Chargement du véhicule…",
+  "wiz.discardQ":        "Abandonner l'inspection ?",
+  "wiz.discardBody":     "Abandonner cette inspection ? Toute progression non enregistrée sur cet écran sera perdue.",
+
+  "details.vin":           "VIN",
+  "details.make":          "Marque",
+  "details.year":          "Année",
+  "details.model":         "Modèle",
+  "details.mileage":       "Kilométrage (km)",
+  "details.color":         "Couleur extérieure",
+  "details.colorExample":  "Blanc",
+  "details.city":          "Ville",
+  "details.sellerName":    "Nom du vendeur",
+  "details.sellerPhone":   "Téléphone du vendeur",
+  "details.marketEstimate":"Estimation du marché",
+  "details.min":           "Min",
+  "details.avg":           "Moy",
+  "details.max":           "Max",
+  "details.estComparable": "Basé sur {count} annonces comparables",
+  "details.estReference":  "Estimé à partir des données du marché — prix de départ & réserve pré-remplis, ajustez si besoin",
+  "details.pricing":       "Tarification de l'enchère",
+  "details.startingPrice": "Prix de départ (EUR)",
+  "details.reservePrice":  "Prix de réserve (EUR)",
+  "details.optional":      "facultatif",
+  "details.pricingHint":   "Le prix de départ lance l'enchère. La réserve est le minimum que le vendeur acceptera — l'admin peut remplacer l'un ou l'autre.",
+
+  "photos.progress":      "{done} sur {total} photos requises prises",
+  "photos.tip":           "Touchez une case pour capturer. Coche verte = téléversé.",
+  "photos.additional":    "Photos supplémentaires",
+  "photos.additionalSub": "Modifications, équipements particuliers, angles de dommages supplémentaires. Jusqu'à {max}.",
+  "photos.add":           "Ajouter une photo",
+  "photos.slot.front":          "Avant",
+  "photos.slot.rear":           "Arrière",
+  "photos.slot.left":           "Côté gauche",
+  "photos.slot.right":          "Côté droit",
+  "photos.slot.front_left":     "Avant-gauche",
+  "photos.slot.front_right":    "Avant-droit",
+  "photos.slot.rear_left":      "Arrière-gauche",
+  "photos.slot.rear_right":     "Arrière-droit",
+  "photos.slot.interior_front": "Intérieur avant",
+  "photos.slot.interior_rear":  "Intérieur arrière",
+  "photos.slot.engine":         "Compartiment moteur",
+  "photos.slot.trunk":          "Coffre",
+
+  "damage.tip":           "Faites le tour du véhicule et marquez chaque élément endommagé.",
+  "damage.paintTitle":    "Test d'épaisseur de peinture",
+  "damage.paintSub":      "Photographiez la mesure de la jauge d'épaisseur de peinture. Enregistrée au rapport d'état.",
+  "damage.paintCapture":  "Capturer la mesure",
+  "damage.needPhotoOne":  "1 élément endommagé nécessite encore une photo.",
+  "damage.needPhotoMany": "{count} éléments endommagés nécessitent encore une photo.",
+  "damage.reported":      "{count} signalé(s)",
+  "damage.clear":         "intact",
+  "damage.outFront":      "AVANT",
+  "damage.outRear":       "ARRIÈRE",
+  "damage.outRoof":       "TOIT",
+  "damage.pickerSub":     "Définissez la gravité du dommage et ajoutez une note rapide.",
+  "damage.pickerPlaceholder": "ex. éraflure de 12 cm, sans éclat de peinture",
+  "damage.takePhoto":     "Prendre une photo du dommage",
+  "damage.retakePhoto":   "Reprendre la photo du dommage",
+  "damage.section.front": "Avant",
+  "damage.section.left":  "Côté gauche",
+  "damage.section.right": "Côté droit",
+  "damage.section.rear":  "Arrière",
+  "damage.section.top":   "Haut",
+  "damage.panel.front_bumper":    "Pare-chocs avant",
+  "damage.panel.hood":            "Capot",
+  "damage.panel.windshield":      "Pare-brise",
+  "damage.panel.left_front_door": "Porte avant gauche",
+  "damage.panel.left_rear_door":  "Porte arrière gauche",
+  "damage.panel.left_fender":     "Aile avant gauche",
+  "damage.panel.right_front_door":"Porte avant droite",
+  "damage.panel.right_rear_door": "Porte arrière droite",
+  "damage.panel.right_fender":    "Aile avant droite",
+  "damage.panel.rear_bumper":     "Pare-chocs arrière",
+  "damage.panel.trunk_lid":       "Couvercle de coffre",
+  "damage.panel.roof":            "Toit",
+  "damage.level.none":     "aucun",
+  "damage.level.cosmetic": "esthétique",
+  "damage.level.minor":    "mineur",
+  "damage.level.moderate": "modéré",
+  "damage.level.major":    "majeur",
+
+  "docs.progress":            "{done} sur {total} documents capturés",
+  "docs.tip":                 "Capturez chaque document avec l'appareil photo. Assurez-vous que le texte est lisible.",
+  "docs.slot.registration":   "Carte grise",
+  "docs.slot.service_book":   "Carnet d'entretien",
+  "docs.slot.insurance":      "Documents d'assurance",
+
+  "review.vehicle":       "Véhicule",
+  "review.startingPrice": "Prix de départ",
+  "review.reserve":       "Réserve",
+  "review.photos":        "Photos",
+  "review.other":         "Autres",
+  "review.damages":       "Dommages",
+  "review.docs":          "Doc.",
+  "review.missingOne":    "1 élément endommagé sans photo. Vous pouvez quand même soumettre, mais les acheteurs ne voient que l'étiquette de gravité.",
+  "review.missingMany":   "{count} éléments endommagés sans photo. Vous pouvez quand même soumettre, mais les acheteurs ne voient que l'étiquette de gravité.",
+  "review.notes":         "Notes de l'inspecteur",
+  "review.notesPlaceholder": "État général, notes mécaniques, tout ce que les acheteurs devraient savoir…",
+  "review.noNotes":       "Aucune note ajoutée.",
+  "review.submit":        "Soumettre l'inspection",
+  "review.submitting":    "Soumission…",
+
+  "submit.signInRequired":     "Connexion requise",
+  "submit.signInRequiredBody": "Votre session a expiré — reconnectez-vous avant de soumettre.",
+  "submit.missingDetails":     "Détails manquants",
+  "submit.missingDetailsBody": "Le VIN, la marque, le modèle et l'année sont requis.",
+  "submit.startPriceReq":      "Prix de départ requis",
+  "submit.startPriceReqBody":  "Saisissez un prix de départ pour l'enchère.",
+  "submit.reserveLow":         "Réserve trop basse",
+  "submit.reserveLowBody":     "Le prix de réserve ne peut pas être inférieur au prix de départ.",
+  "submit.cameraOff":          "Appareil photo désactivé",
+  "submit.cameraOffBody":      "Autorisez l'accès à l'appareil photo dans les Réglages pour capturer des photos.",
+  "submit.uploadFailed":       "Échec du téléversement",
+  "submit.uploadFailedBody":   "{msg}\n\nLa photo est toujours sur votre appareil — réessayez ou soumettez plus tard.",
+  "submit.ok":                 "Inspection soumise",
+  "submit.okResubmit":         "Resoumise à l'admin pour révision.",
+  "submit.okSaved":            "Enregistré. Touchez « Soumettre pour mise en vente » sur votre tableau de bord pour l'envoyer à l'admin.",
+  "submit.failed":             "Échec de la soumission",
+  "submit.failedBody":         "Erreur inconnue — vérifiez la console du navigateur.",
+};
+
+const ar: Dict = {
+  "nav.inspection": "الفحص",
+  "nav.discard":    "تجاهل",
+
+  "common.back":    "رجوع",
+  "common.next":    "التالي",
+  "common.cancel":  "إلغاء",
+  "common.save":    "حفظ",
+  "common.discard": "تجاهل",
+  "common.delete":  "حذف",
+  "common.submit":  "إرسال",
+  "common.edit":    "تعديل",
+
+  "auth.portal":       "بوابة الفاحص",
+  "auth.signIn":       "تسجيل الدخول",
+  "auth.signInBlurb":  "استخدم بيانات الدخول الصادرة من منسّق XportACar لبدء الفحص.",
+  "auth.email":        "البريد الإلكتروني",
+  "auth.password":     "كلمة المرور",
+  "auth.signingIn":    "جارٍ تسجيل الدخول…",
+  "auth.missingInfo":  "معلومات ناقصة",
+  "auth.missingBody":  "أدخل البريد الإلكتروني وكلمة المرور.",
+  "auth.signInFailed": "فشل تسجيل الدخول",
+  "auth.foot":         "تحتاج إلى صلاحية وصول؟ تواصل مع منسّقك.",
+
+  "dash.portal":            "بوابة الفاحص",
+  "dash.greetingMorning":   "صباح الخير",
+  "dash.greetingAfternoon": "مساء الخير",
+  "dash.greetingEvening":   "مساء الخير",
+  "dash.assigned":          "مُسندة",
+  "dash.completed":         "مكتملة",
+  "dash.loading":           "جارٍ تحميل عمليات الفحص…",
+  "dash.newTitle":          "بدء فحص جديد",
+  "dash.newSub":            "مركبة بدون موعد؟ ابدأ تقريرًا جديدًا من الصفر.",
+  "dash.sectionDrafts":     "مسودات قيد التنفيذ",
+  "dash.sectionChanges":    "تعديلات مطلوبة",
+  "dash.sectionAssigned":   "المُسندة إليك",
+  "dash.sectionCompleted":  "عمليات الفحص المكتملة",
+  "dash.noAssignedTitle":   "لا توجد مركبات مُسندة",
+  "dash.noAssignedBody":    "اطلب من المشرف إسناد مركبة إليك، أو ابدأ فحصًا جديدًا بدون موعد.",
+  "dash.noCompletedTitle":  "لا توجد عمليات فحص مكتملة بعد",
+  "dash.noCompletedBody":   "بمجرد إرسال أول فحص لك، سيظهر هنا في سجلّاتك.",
+  "dash.lastEdited":        "آخر تعديل {when}",
+  "dash.stepN":             "الخطوة {n}",
+  "dash.deleteDraft":       "حذف المسودة",
+  "dash.changesCta":        "اضغط لإجراء التعديلات وإعادة الإرسال →",
+  "dash.changesDefault":    "طلب المشرف تعديلات قبل الإدراج.",
+  "dash.scheduled":         "مجدول",
+  "dash.inReview":          "قيد المراجعة",
+  "dash.photosCount":       "{count} صورة",
+  "dash.submitForListing":  "إرسال للإدراج",
+  "dash.untitledDraft":     "مسودة بلا عنوان",
+  "dash.language":          "اللغة",
+  "dash.justNow":   "الآن",
+  "dash.minAgo":    "قبل {n} د",
+  "dash.hourAgo":   "قبل {n} س",
+  "dash.yesterday": "أمس",
+  "dash.daysAgo":   "قبل {n} ي",
+  "dash.deleteDraftQ":    "حذف المسودة؟",
+  "dash.deleteDraftBody": "حذف هذه المسودة؟ لا يمكن التراجع عن هذا.",
+  "dash.submitQ":         "إرسال للإدراج؟",
+  "dash.submitBody":      "إرسال {summary} إلى فريق الإدارة للمراجعة والإدراج.",
+  "dash.submitErr":       "تعذّر الإرسال",
+  "dash.submitOk":        "تم الإرسال للإدراج",
+  "dash.submitOkBody":    "سيقوم فريق الإدارة بمراجعته ونشره.",
+
+  "step.details":   "التفاصيل",
+  "step.photos":    "الصور",
+  "step.damage":    "الأضرار",
+  "step.documents": "المستندات",
+  "step.review":    "المراجعة",
+
+  "wiz.stepOf":          "الخطوة {n} من {total}",
+  "wiz.viewing":         "عرض الفحص (للقراءة فقط).",
+  "wiz.resumed":         "تمت متابعة مسودة الفحص من جلسة سابقة.",
+  "wiz.discardDraftQ":   "تجاهل المسودة؟",
+  "wiz.discardDraftBody":"مسح الحقول المحفوظة تلقائيًا والبدء من جديد؟",
+  "wiz.changesTitle":    "تعديلات مطلوبة من المشرف",
+  "wiz.changesHint":     "أجرِ التعديلات، ثم أرسلها مجددًا لإعادتها إلى المراجعة.",
+  "wiz.loadingVehicle":  "جارٍ تحميل المركبة…",
+  "wiz.discardQ":        "تجاهل الفحص؟",
+  "wiz.discardBody":     "التخلي عن هذا الفحص؟ سيُفقد أي تقدّم غير محفوظ على هذه الشاشة.",
+
+  "details.vin":           "VIN",
+  "details.make":          "الماركة",
+  "details.year":          "السنة",
+  "details.model":         "الموديل",
+  "details.mileage":       "المسافة (كم)",
+  "details.color":         "اللون الخارجي",
+  "details.colorExample":  "أبيض",
+  "details.city":          "المدينة",
+  "details.sellerName":    "اسم البائع",
+  "details.sellerPhone":   "هاتف البائع",
+  "details.marketEstimate":"تقدير السوق",
+  "details.min":           "الأدنى",
+  "details.avg":           "المتوسط",
+  "details.max":           "الأعلى",
+  "details.estComparable": "استنادًا إلى {count} إعلانًا مماثلًا",
+  "details.estReference":  "مُقدَّر من بيانات السوق — تمت تعبئة سعر البدء والاحتياطي مسبقًا، عدّلها حسب الحاجة",
+  "details.pricing":       "تسعير المزاد",
+  "details.startingPrice": "سعر البدء (يورو)",
+  "details.reservePrice":  "السعر الاحتياطي (يورو)",
+  "details.optional":      "اختياري",
+  "details.pricingHint":   "سعر البدء يفتتح المزاد. السعر الاحتياطي هو أدنى سعر يقبله البائع — يمكن للمشرف تجاوز أيٍّ منهما.",
+
+  "photos.progress":      "تم التقاط {done} من {total} صورة مطلوبة",
+  "photos.tip":           "اضغط على مربّع لالتقاط صورة. علامة خضراء = تم الرفع.",
+  "photos.additional":    "صور إضافية",
+  "photos.additionalSub": "تعديلات مخصّصة، ميزات خاصة، زوايا أضرار إضافية. حتى {max}.",
+  "photos.add":           "إضافة صورة",
+  "photos.slot.front":          "الأمام",
+  "photos.slot.rear":           "الخلف",
+  "photos.slot.left":           "الجانب الأيسر",
+  "photos.slot.right":          "الجانب الأيمن",
+  "photos.slot.front_left":     "الأمام الأيسر",
+  "photos.slot.front_right":    "الأمام الأيمن",
+  "photos.slot.rear_left":      "الخلف الأيسر",
+  "photos.slot.rear_right":     "الخلف الأيمن",
+  "photos.slot.interior_front": "الداخل الأمامي",
+  "photos.slot.interior_rear":  "الداخل الخلفي",
+  "photos.slot.engine":         "حجرة المحرك",
+  "photos.slot.trunk":          "صندوق الأمتعة",
+
+  "damage.tip":           "در حول السيارة وأشّر على كل قطعة بها ضرر.",
+  "damage.paintTitle":    "اختبار سُمك الطلاء",
+  "damage.paintSub":      "صوّر قراءة جهاز قياس سُمك الطلاء. تُحفظ في تقرير الحالة.",
+  "damage.paintCapture":  "التقاط القراءة",
+  "damage.needPhotoOne":  "قطعة متضررة واحدة لا تزال بحاجة إلى صورة.",
+  "damage.needPhotoMany": "{count} قطع متضررة لا تزال بحاجة إلى صور.",
+  "damage.reported":      "{count} مُبلَّغ عنها",
+  "damage.clear":         "سليم",
+  "damage.outFront":      "الأمام",
+  "damage.outRear":       "الخلف",
+  "damage.outRoof":       "السقف",
+  "damage.pickerSub":     "حدّد شدة الضرر وأضف ملاحظة سريعة.",
+  "damage.pickerPlaceholder": "مثال: خدش 12 سم، دون كسر في الطلاء",
+  "damage.takePhoto":     "التقاط صورة الضرر",
+  "damage.retakePhoto":   "إعادة التقاط صورة الضرر",
+  "damage.section.front": "الأمام",
+  "damage.section.left":  "الجانب الأيسر",
+  "damage.section.right": "الجانب الأيمن",
+  "damage.section.rear":  "الخلف",
+  "damage.section.top":   "الأعلى",
+  "damage.panel.front_bumper":    "الصدّام الأمامي",
+  "damage.panel.hood":            "غطاء المحرك",
+  "damage.panel.windshield":      "الزجاج الأمامي",
+  "damage.panel.left_front_door": "الباب الأمامي الأيسر",
+  "damage.panel.left_rear_door":  "الباب الخلفي الأيسر",
+  "damage.panel.left_fender":     "الرفرف الأيسر",
+  "damage.panel.right_front_door":"الباب الأمامي الأيمن",
+  "damage.panel.right_rear_door": "الباب الخلفي الأيمن",
+  "damage.panel.right_fender":    "الرفرف الأيمن",
+  "damage.panel.rear_bumper":     "الصدّام الخلفي",
+  "damage.panel.trunk_lid":       "غطاء صندوق الأمتعة",
+  "damage.panel.roof":            "السقف",
+  "damage.level.none":     "لا يوجد",
+  "damage.level.cosmetic": "تجميلي",
+  "damage.level.minor":    "طفيف",
+  "damage.level.moderate": "متوسط",
+  "damage.level.major":    "كبير",
+
+  "docs.progress":            "تم التقاط {done} من {total} مستند",
+  "docs.tip":                 "صوّر كل مستند بالكاميرا. تأكّد من وضوح النص.",
+  "docs.slot.registration":   "رخصة التسجيل",
+  "docs.slot.service_book":   "دفتر الصيانة",
+  "docs.slot.insurance":      "مستندات التأمين",
+
+  "review.vehicle":       "المركبة",
+  "review.startingPrice": "سعر البدء",
+  "review.reserve":       "الاحتياطي",
+  "review.photos":        "الصور",
+  "review.other":         "أخرى",
+  "review.damages":       "الأضرار",
+  "review.docs":          "مستندات",
+  "review.missingOne":    "قطعة متضررة واحدة بلا صورة. يمكنك الإرسال رغم ذلك، لكن المشترين يرون وسم الشدّة فقط.",
+  "review.missingMany":   "{count} قطع متضررة بلا صور. يمكنك الإرسال رغم ذلك، لكن المشترين يرون وسم الشدّة فقط.",
+  "review.notes":         "ملاحظات الفاحص",
+  "review.notesPlaceholder": "الحالة العامة، ملاحظات ميكانيكية، أي شيء يجب أن يعرفه المشترون…",
+  "review.noNotes":       "لم تُضَف ملاحظات.",
+  "review.submit":        "إرسال الفحص",
+  "review.submitting":    "جارٍ الإرسال…",
+
+  "submit.signInRequired":     "تسجيل الدخول مطلوب",
+  "submit.signInRequiredBody": "انتهت جلستك — سجّل الدخول مجددًا قبل الإرسال.",
+  "submit.missingDetails":     "تفاصيل ناقصة",
+  "submit.missingDetailsBody": "VIN والماركة والموديل والسنة مطلوبة.",
+  "submit.startPriceReq":      "سعر البدء مطلوب",
+  "submit.startPriceReqBody":  "أدخل سعر بدء للمزاد.",
+  "submit.reserveLow":         "السعر الاحتياطي منخفض جدًا",
+  "submit.reserveLowBody":     "لا يمكن أن يقل السعر الاحتياطي عن سعر البدء.",
+  "submit.cameraOff":          "الكاميرا معطّلة",
+  "submit.cameraOffBody":      "امنح صلاحية الكاميرا من الإعدادات لالتقاط الصور.",
+  "submit.uploadFailed":       "فشل الرفع",
+  "submit.uploadFailedBody":   "{msg}\n\nالصورة ما زالت على جهازك — أعد المحاولة أو أرسلها لاحقًا.",
+  "submit.ok":                 "تم إرسال الفحص",
+  "submit.okResubmit":         "أُعيد إرساله إلى المشرف للمراجعة.",
+  "submit.okSaved":            "تم الحفظ. اضغط „إرسال للإدراج“ في لوحتك لإرساله إلى المشرف.",
+  "submit.failed":             "فشل الإرسال",
+  "submit.failedBody":         "خطأ غير معروف — تحقّق من وحدة تحكّم المتصفح.",
+};
+
+const DICTS: Record<Locale, Dict> = { en, de, ar, fr };
+
+function format(template: string, values?: Record<string, string | number>): string {
+  if (!values) return template;
+  return template.replace(/\{(\w+)\}/g, (_, k) => String(values[k] ?? ""));
+}
+
+// RTL via RN's I18nManager — the supported cross-platform path. The
+// per-View `direction` style only works on iOS and crashes Android.
+// I18nManager flips the global writing direction; the change takes effect
+// after the JS bundle reloads (Android requires a native restart, which
+// happens on next app launch in production). Applying this on every launch
+// from the stored locale also self-corrects if another app in the same
+// Expo Go process left the flag stuck (e.g. the buyer app with locale=ar).
+function applyRtl(shouldBeRtl: boolean) {
+  try {
+    I18nManager.allowRTL(shouldBeRtl);
+    if (I18nManager.isRTL !== shouldBeRtl) {
+      I18nManager.forceRTL(shouldBeRtl);
+    }
+  } catch { /* RN platform without I18nManager (web) — no-op */ }
+}
+
+// ------- Context wiring ----------------------------------------------
+
+interface I18nValue {
+  locale: Locale;
+  setLocale: (l: Locale) => Promise<void>;
+  isRtl: boolean;
+  t: (key: string, values?: Record<string, string | number>) => string;
+}
+
+const I18nContext = createContext<I18nValue | null>(null);
+
+export function I18nProvider({ children }: { children: ReactNode }) {
+  const [locale, setLocaleState] = useState<Locale>("en");
+
+  // On mount: prefer the signed-in inspector's profile.language, fall back
+  // to SecureStore (across sign-outs), then default to English. Always
+  // apply the matching RTL flag so a stale RTL state is corrected.
+  useEffect(() => {
+    (async () => {
+      let next: Locale | null = null;
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data } = await supabase
+            .from("profiles").select("language").eq("id", user.id).single();
+          if (data?.language && SUPPORTED.includes(data.language as Locale)) {
+            next = data.language as Locale;
+          }
+        }
+      } catch { /* offline / signed out */ }
+      if (!next) {
+        const stored = await SecureStore.getItemAsync(STORE_KEY).catch(() => null);
+        if (stored && SUPPORTED.includes(stored as Locale)) next = stored as Locale;
+      }
+      const resolved = next ?? "en";
+      if (resolved !== "en") setLocaleState(resolved);
+      applyRtl(resolved === "ar");
+    })();
+  }, []);
+
+  // Setter — update React state SYNCHRONOUSLY so every consuming screen
+  // re-renders this frame. Persistence to SecureStore + profile happens in
+  // the background; failures are silent so they never block the UI update.
+  const setLocale = useCallback(async (next: Locale) => {
+    setLocaleState(next);
+    applyRtl(next === "ar");
+    void SecureStore.setItemAsync(STORE_KEY, next).catch(() => {});
+    void (async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await supabase.from("profiles").update({ language: next }).eq("id", user.id);
+        }
+      } catch { /* silent */ }
+    })();
+  }, []);
+
+  const t = useCallback(
+    (key: string, values?: Record<string, string | number>): string => {
+      const dict = DICTS[locale] ?? en;
+      return format(dict[key] ?? en[key] ?? key, values);
+    },
+    [locale],
+  );
+
+  return createElement(
+    I18nContext.Provider,
+    { value: { locale, setLocale, isRtl: locale === "ar", t } },
+    children,
+  );
+}
+
+export function useTranslation() {
+  const ctx = useContext(I18nContext);
+  if (!ctx) throw new Error("useTranslation must be used inside <I18nProvider>");
+  return ctx;
+}
+
+// Maps a damage panel's canonical English name (stored in the DB) to its
+// translation key — e.g. "Front bumper" -> "damage.panel.front_bumper".
+export function panelLabelKey(panelEnglish: string): string {
+  return `damage.panel.${panelEnglish.toLowerCase().replace(/\s+/g, "_")}`;
+}

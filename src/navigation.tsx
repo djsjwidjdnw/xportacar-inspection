@@ -7,6 +7,7 @@ import { DashboardScreen as DashboardScreenImpl } from "./screens/DashboardScree
 import { InspectionWizardScreen as InspectionWizardScreenImpl } from "./screens/InspectionWizardScreen";
 
 import { useAuth } from "./lib/auth";
+import { useTranslation } from "./lib/i18n";
 import { theme } from "./lib/theme";
 
 const Stack = createNativeStackNavigator();
@@ -30,6 +31,7 @@ const navTheme = {
 
 export function RootNavigator() {
   const { user, loading } = useAuth();
+  const { t } = useTranslation();
   if (loading) return null;
 
   return (
@@ -48,7 +50,7 @@ export function RootNavigator() {
             <Stack.Screen
               name="Inspect"
               component={InspectionWizard}
-              options={{ headerShown: true, title: "Inspection" }}
+              options={{ headerShown: true, title: t("nav.inspection") }}
             />
           </>
         ) : (
