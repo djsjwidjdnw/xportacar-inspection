@@ -16,6 +16,7 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { I18nManager } from "react-native";
 import * as SecureStore from "expo-secure-store";
+import * as Updates from "expo-updates";
 import { supabase } from "./supabase";
 
 export type Locale = "en" | "de" | "ar" | "fr";
@@ -1198,11 +1199,13 @@ function format(template: string, values?: Record<string, string | number>): str
 
 // RTL via RN's I18nManager — the supported cross-platform path. The
 // per-View `direction` style only works on iOS and crashes Android.
-// I18nManager flips the global writing direction; the change takes effect
-// after the JS bundle reloads (Android requires a native restart, which
-// happens on next app launch in production). Applying this on every launch
-// from the stored locale also self-corrects if another app in the same
-// Expo Go process left the flag stuck (e.g. the buyer app with locale=ar).
+// I18nManager.forceRTL flips the GLOBAL writing direction, but the change
+// only takes VISUAL effect after the JS bundle reloads. So toggling the locale
+// alone leaves the layout mirrored — switching back EN/DE/FR after Arabic
+// stayed RTL because forceRTL(false) never got a reload to apply. setLocale
+// below reloads (expo-updates) whenever the direction actually flips.
+// Applying this on every launch from the stored locale also self-corrects if
+// another app in the same Expo Go process left the flag stuck.
 function applyRtl(shouldBeRtl: boolean) {
   try {
     I18nManager.allowRTL(shouldBeRtl);
@@ -1212,12 +1215,30 @@ function applyRtl(shouldBeRtl: boolean) {
   } catch { /* RN platform without I18nManager (web) — no-op */ }
 }
 
+// Persist the chosen locale to the inspector's profile so the web app and
+// other clients pick it up. Capped so a slow/offline network can never hang
+// the language switch — important because the RTL path awaits this before the
+// reload, and SecureStore (awaited separately) is the source of truth anyway.
+async function persistLocaleToProfile(next: Locale): Promise<void> {
+  const work = (async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) await supabase.from("profiles").update({ language: next }).eq("id", user.id);
+    } catch { /* silent */ }
+  })();
+  const cap = new Promise<void>((resolve) => setTimeout(resolve, 2500));
+  await Promise.race([work, cap]);
+}
+
 // ------- Context wiring ----------------------------------------------
 
 interface I18nValue {
   locale: Locale;
   setLocale: (l: Locale) => Promise<void>;
   isRtl: boolean;
+  // True while a locale switch that flips writing direction is persisting +
+  // reloading the bundle, so the language picker can show a loading state.
+  switchingLocale: boolean;
   t: (key: string, values?: Record<string, string | number>) => string;
 }
 
@@ -1225,6 +1246,7 @@ const I18nContext = createContext<I18nValue | null>(null);
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>("en");
+  const [switching, setSwitching] = useState(false);
 
   // On mount: prefer the signed-in inspector's profile.language, fall back
   // to SecureStore (across sign-outs), then default to English. Always
@@ -1252,21 +1274,36 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
-  // Setter — update React state SYNCHRONOUSLY so every consuming screen
-  // re-renders this frame. Persistence to SecureStore + profile happens in
-  // the background; failures are silent so they never block the UI update.
+  // Setter. Same-direction switches (EN ↔ DE ↔ FR) re-render instantly and
+  // persist in the background — no reload. Switching INTO or OUT OF Arabic
+  // flips the writing direction, which RN only applies on a JS reload, so we
+  // persist FIRST (awaited, so the relaunched bundle comes back in the new
+  // locale) and then reload via expo-updates. Without the reload the screen
+  // stays mirrored when going RTL → LTR — that was the reported bug.
   const setLocale = useCallback(async (next: Locale) => {
+    const shouldBeRtl = next === "ar";
+    const directionChanged = I18nManager.isRTL !== shouldBeRtl;
+
     setLocaleState(next);
-    applyRtl(next === "ar");
-    void SecureStore.setItemAsync(STORE_KEY, next).catch(() => {});
-    void (async () => {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          await supabase.from("profiles").update({ language: next }).eq("id", user.id);
-        }
-      } catch { /* silent */ }
-    })();
+    applyRtl(shouldBeRtl);
+
+    if (!directionChanged) {
+      void SecureStore.setItemAsync(STORE_KEY, next).catch(() => {});
+      void persistLocaleToProfile(next);
+      return;
+    }
+
+    setSwitching(true);
+    await SecureStore.setItemAsync(STORE_KEY, next).catch(() => {});
+    await persistLocaleToProfile(next);
+    try {
+      await Updates.reloadAsync();
+      // reloadAsync tears down the JS context — nothing after this runs on success.
+    } catch {
+      // Dev client / Expo Go / web export: reloadAsync is unavailable. forceRTL
+      // is already set and applies on the next manual restart; free the picker.
+      setSwitching(false);
+    }
   }, []);
 
   const t = useCallback(
@@ -1279,7 +1316,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   return createElement(
     I18nContext.Provider,
-    { value: { locale, setLocale, isRtl: locale === "ar", t } },
+    { value: { locale, setLocale, isRtl: locale === "ar", switchingLocale: switching, t } },
     children,
   );
 }

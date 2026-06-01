@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Icon } from "../components/Icon";
 import { useFocusEffect } from "@react-navigation/native";
@@ -40,7 +40,7 @@ type Section = { section: "drafts" } | { section: "changes" } | { section: "assi
 
 export function DashboardScreen({ navigation }: { navigation: { navigate: (s: string, p?: object) => void } }) {
   const { user, signOut } = useAuth();
-  const { t, locale, setLocale } = useTranslation();
+  const { t, locale, setLocale, switchingLocale } = useTranslation();
   const [assigned, setAssigned] = useState<AssignedVehicle[]>([]);
   const [changesRequested, setChangesRequested] = useState<AssignedVehicle[]>([]);
   const [completed, setCompleted] = useState<CompletedVehicle[]>([]);
@@ -222,6 +222,9 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
               <Icon name="globe-outline" size={13} color={theme.colors.textLight} />
               <Text style={styles.langRowLabel}>{t("dash.language")}</Text>
               <View style={{ flex: 1 }} />
+              {switchingLocale && (
+                <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginRight: 6 }} />
+              )}
               <View style={styles.langBtns}>
                 {SUPPORTED.map((code: Locale) => {
                   const active = locale === code;
@@ -229,7 +232,8 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                     <Pressable
                       key={code}
                       onPress={() => void setLocale(code)}
-                      style={({ pressed }) => [styles.langBtn, active && styles.langBtnActive, pressed && { opacity: 0.9 }]}
+                      disabled={switchingLocale}
+                      style={({ pressed }) => [styles.langBtn, active && styles.langBtnActive, (pressed || switchingLocale) && { opacity: 0.9 }]}
                       accessibilityRole="button"
                       accessibilityLabel={LANG_LABELS[code].label}
                     >
