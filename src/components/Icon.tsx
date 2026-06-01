@@ -13,7 +13,8 @@ export type IconName =
   | "document-text-outline" | "eye-outline" | "lock-closed-outline" | "log-in-outline"
   | "log-out-outline" | "mail-outline" | "pricetag-outline" | "trash-outline"
   | "warning-outline" | "eye-off-outline" | "folder-open-outline" | "cloud-upload-outline"
-  | "globe-outline";
+  | "globe-outline" | "search-outline" | "close-circle" | "chevron-down" | "chevron-up"
+  | "color-palette-outline" | "images-outline";
 
 export function Icon({
   name,

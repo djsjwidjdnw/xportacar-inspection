@@ -20,6 +20,9 @@ export interface VehicleRow {
   exterior_color: string | null;
   interior_color: string | null;
   body_type: string | null;
+  engine: string | null;
+  drivetrain: string | null;
+  market_spec: string | null;
   location_city: string;
   location_country: string;
   status: VehicleStatus;

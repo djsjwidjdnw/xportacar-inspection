@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView,
   StyleSheet, Text, TextInput, View,
@@ -19,6 +19,11 @@ import { estimateValuation, getMarketValuation, type Valuation } from "../lib/va
 import { useAuth } from "../lib/auth";
 import { useTranslation, panelLabelKey } from "../lib/i18n";
 import type { VehicleRow } from "../lib/types";
+import { SearchableSelect, type SelectOption } from "../components/SearchableSelect";
+import {
+  ALL_MAKES, POPULAR_MAKES, MARKET_SPECS, modelsForMake, isKnownMake, isKnownModel,
+} from "../lib/vehicleData";
+import { decodeVin, isValidVin, type DecodedVin, type FuelType, type Transmission } from "../lib/vinDecoder";
 
 type TFunc = (key: string, values?: Record<string, string | number>) => string;
 
@@ -46,6 +51,9 @@ export interface AutosavePayload {
   sellerName: string; sellerPhone: string;
   startingPrice: string; reservePrice: string;
   notes?: string;
+  // VIN-decoder / extra attributes (all optional so older drafts still parse).
+  bodyType?: string; engine?: string; drivetrain?: string;
+  transmission?: string; fuelType?: string; marketSpec?: string;
 }
 
 export { autosaveKeyFor as inspectionAutosaveKeyFor, AUTOSAVE_KEY_PREFIX as INSPECTION_AUTOSAVE_PREFIX };
@@ -123,24 +131,84 @@ const STEPS = [
   { n: 5, tkey: "step.review",    icon: "checkmark-done-outline" as const },
 ] as const;
 
-// `label` is the canonical English caption stored on each vehicle_photos
-// row (read by the web/admin/buyer apps); `tkey` is the on-screen label.
-const PHOTO_SLOTS = [
-  { key: "front",           label: "Front",          tkey: "photos.slot.front" },
-  { key: "rear",            label: "Rear",           tkey: "photos.slot.rear" },
-  { key: "left",            label: "Left side",      tkey: "photos.slot.left" },
-  { key: "right",           label: "Right side",     tkey: "photos.slot.right" },
-  { key: "front_left",      label: "Front-left",     tkey: "photos.slot.front_left" },
-  { key: "front_right",     label: "Front-right",    tkey: "photos.slot.front_right" },
-  { key: "rear_left",       label: "Rear-left",      tkey: "photos.slot.rear_left" },
-  { key: "rear_right",      label: "Rear-right",     tkey: "photos.slot.rear_right" },
-  { key: "interior_front",  label: "Interior front", tkey: "photos.slot.interior_front" },
-  { key: "interior_rear",   label: "Interior rear",  tkey: "photos.slot.interior_rear" },
-  { key: "engine",          label: "Engine bay",     tkey: "photos.slot.engine" },
-  { key: "trunk",           label: "Trunk",          tkey: "photos.slot.trunk" },
-] as const;
+// Photo capture is organised into collapsible sections. Each slot's `label`
+// is the canonical English caption stored on the vehicle_photos row (read by
+// the web/admin/buyer apps); `tkey` is the on-screen label. The section's
+// `category` is the vehicle_photos.category enum value for every slot in it.
+interface PhotoSlot { key: string; label: string; tkey: string }
+interface PhotoSection { key: string; tkey: string; category: string; icon: string; slots: PhotoSlot[] }
+
+const PHOTO_SECTIONS: PhotoSection[] = [
+  {
+    key: "exterior", tkey: "photos.section.exterior", category: "exterior", icon: "car-sport-outline",
+    slots: [
+      { key: "ext_front",        label: "Front",                  tkey: "photos.slot.ext_front" },
+      { key: "ext_rear",         label: "Rear",                   tkey: "photos.slot.ext_rear" },
+      { key: "ext_left",         label: "Left side (full)",       tkey: "photos.slot.ext_left" },
+      { key: "ext_right",        label: "Right side (full)",      tkey: "photos.slot.ext_right" },
+      { key: "ext_front_left",   label: "Front-left 3/4",         tkey: "photos.slot.ext_front_left" },
+      { key: "ext_front_right",  label: "Front-right 3/4",        tkey: "photos.slot.ext_front_right" },
+      { key: "ext_rear_left",    label: "Rear-left 3/4",          tkey: "photos.slot.ext_rear_left" },
+      { key: "ext_rear_right",   label: "Rear-right 3/4",         tkey: "photos.slot.ext_rear_right" },
+      { key: "ext_wheel_fl",     label: "Front-left wheel",       tkey: "photos.slot.ext_wheel_fl" },
+      { key: "ext_wheel_fr",     label: "Front-right wheel",      tkey: "photos.slot.ext_wheel_fr" },
+      { key: "ext_wheel_rl",     label: "Rear-left wheel",        tkey: "photos.slot.ext_wheel_rl" },
+      { key: "ext_wheel_rr",     label: "Rear-right wheel",       tkey: "photos.slot.ext_wheel_rr" },
+      { key: "ext_roof",         label: "Roof / sunroof",         tkey: "photos.slot.ext_roof" },
+    ],
+  },
+  {
+    key: "interior", tkey: "photos.section.interior", category: "interior", icon: "checkmark-circle",
+    slots: [
+      { key: "int_driver_seat",     label: "Driver seat",                 tkey: "photos.slot.int_driver_seat" },
+      { key: "int_passenger_seat",  label: "Passenger front seat",        tkey: "photos.slot.int_passenger_seat" },
+      { key: "int_rear_seats",      label: "Rear seats",                  tkey: "photos.slot.int_rear_seats" },
+      { key: "int_dashboard",       label: "Dashboard (full)",            tkey: "photos.slot.int_dashboard" },
+      { key: "int_cluster",         label: "Instrument cluster (mileage)", tkey: "photos.slot.int_cluster" },
+      { key: "int_console",         label: "Center console / infotainment", tkey: "photos.slot.int_console" },
+      { key: "int_driver_door",     label: "Driver door panel",           tkey: "photos.slot.int_driver_door" },
+      { key: "int_passenger_door",  label: "Passenger door panel",        tkey: "photos.slot.int_passenger_door" },
+      { key: "int_headliner",       label: "Headliner / ceiling",         tkey: "photos.slot.int_headliner" },
+      { key: "int_boot",            label: "Trunk / boot interior",       tkey: "photos.slot.int_boot" },
+    ],
+  },
+  {
+    key: "engine", tkey: "photos.section.engine", category: "engine", icon: "pricetag-outline",
+    slots: [
+      { key: "eng_bay",        label: "Engine bay (full)",        tkey: "photos.slot.eng_bay" },
+      { key: "eng_block",      label: "Engine block close-up",    tkey: "photos.slot.eng_block" },
+      { key: "eng_vin_plate",  label: "VIN plate under hood",     tkey: "photos.slot.eng_vin_plate" },
+    ],
+  },
+  {
+    key: "undercarriage", tkey: "photos.section.undercarriage", category: "undercarriage", icon: "warning-outline",
+    slots: [
+      { key: "und_front",  label: "Front undercarriage",          tkey: "photos.slot.und_front" },
+      { key: "und_rear",   label: "Rear undercarriage (exhaust)", tkey: "photos.slot.und_rear" },
+    ],
+  },
+  {
+    key: "documents", tkey: "photos.section.documents", category: "documents", icon: "document-text-outline",
+    slots: [
+      { key: "doc_vin_jamb",     label: "VIN plate (door jamb)",     tkey: "photos.slot.doc_vin_jamb" },
+      { key: "doc_registration", label: "Registration / Mulkiya",    tkey: "photos.slot.doc_registration" },
+    ],
+  },
+];
+
+// Flat slot list + key→{label,category} lookup used on submit.
+const ALL_PHOTO_SLOTS: Array<PhotoSlot & { category: string }> =
+  PHOTO_SECTIONS.flatMap((s) => s.slots.map((sl) => ({ ...sl, category: s.category })));
+const TOTAL_PHOTO_SLOTS = ALL_PHOTO_SLOTS.length;
+const PHOTO_SLOT_BY_KEY: Record<string, { label: string; category: string }> =
+  Object.fromEntries(ALL_PHOTO_SLOTS.map((s) => [s.key, { label: s.label, category: s.category }]));
 
 const MAX_OTHER_PHOTOS = 10;
+
+// Vehicle attribute enums surfaced as inline pill selectors (auto-fillable
+// from the VIN decoder, overridable by the inspector). Values are the DB enums.
+const FUEL_TYPES: FuelType[] = ["petrol", "diesel", "hybrid", "electric"];
+const TRANSMISSIONS: Transmission[] = ["automatic", "manual"];
 
 // Grouped damage panels — each entry maps to a labelled section so the
 // inspector can move through the car visually instead of scanning a flat
@@ -223,6 +291,38 @@ export function InspectionWizardScreen({
   // buyer/web condition report can show them.
   const [notes, setNotes] = useState("");
 
+  // Extra vehicle attributes — auto-fillable from the VIN decoder, all
+  // overridable by the inspector. transmission/fuelType map to DB enums.
+  const [bodyType, setBodyType] = useState("");
+  const [engine, setEngine] = useState("");
+  const [drivetrain, setDrivetrain] = useState("");
+  const [transmission, setTransmission] = useState<Transmission | "">("");
+  const [fuelType, setFuelType] = useState<FuelType | "">("");
+  // Market spec (regional variant) — required for listing. Stored on
+  // vehicles.market_spec and shown on the web specs grid.
+  const [marketSpec, setMarketSpec] = useState("");
+
+  // Make/Model are searchable dropdowns; *Other flags switch a field to a
+  // free-text input for values not in the reference list.
+  const [makeOther, setMakeOther] = useState(false);
+  const [modelOther, setModelOther] = useState(false);
+  const [makePickerOpen, setMakePickerOpen] = useState(false);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [marketPickerOpen, setMarketPickerOpen] = useState(false);
+
+  // VIN decoder state. `decoded` drives the "Decoded" badges; `manuallyEdited`
+  // (a ref so it doesn't retrigger the decode effect) protects inspector edits
+  // from being clobbered by a later decode. Results are cached per-VIN for the
+  // session so an unchanged VIN never re-hits the API.
+  const [decoded, setDecoded] = useState<Record<string, true>>({});
+  const manuallyEditedRef = useRef<Set<string>>(new Set());
+  const decodeCacheRef = useRef<Map<string, DecodedVin | null>>(new Map());
+  const lastDecodedVinRef = useRef<string>("");
+  const [vinStatus, setVinStatus] = useState<"idle" | "decoding" | "ok" | "fail">("idle");
+
+  // Photo step — which sections are expanded (exterior open by default).
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({ exterior: true });
+
   // Market estimate + auto-fill. Auto-fills starting=avg / reserve=min until
   // the inspector edits a price (or for an existing vehicle with saved prices).
   // Instant reference-table estimate, upgraded to live market data (debounced)
@@ -290,6 +390,26 @@ export function InspectionWizardScreen({
         setStartingPrice(v.listed_price_eur != null ? String(v.listed_price_eur) : "");
         setReservePrice(v.reserve_price_eur != null ? String(v.reserve_price_eur) : "");
         setNotes(v.inspection_notes ?? "");
+        setBodyType(v.body_type ?? "");
+        setEngine(v.engine ?? "");
+        setDrivetrain(v.drivetrain ?? "");
+        if (v.transmission === "automatic" || v.transmission === "manual") setTransmission(v.transmission);
+        if (v.fuel_type === "petrol" || v.fuel_type === "diesel" || v.fuel_type === "hybrid" || v.fuel_type === "electric") setFuelType(v.fuel_type);
+        setMarketSpec(v.market_spec ?? "");
+        setMarketOther(!!v.market_spec && !MARKET_SPECS.some((m) => m.value === v.market_spec));
+        // Unknown make/model load straight into free-text mode.
+        setMakeOther(!!v.make && !isKnownMake(v.make));
+        setModelOther(!!v.model && !isKnownModel(v.make ?? "", v.model));
+        // Saved DB values are authoritative — don't auto-decode this VIN on
+        // mount and clobber them. (Editing the VIN to a new value re-enables it.)
+        lastDecodedVinRef.current = (v.vin ?? "").trim().toUpperCase();
+        // Treat populated fields as manual input so a later VIN re-decode only
+        // fills blanks rather than overwriting saved values.
+        const edited = manuallyEditedRef.current;
+        for (const [k, val] of Object.entries({
+          make: v.make, model: v.model, year: v.year, bodyType: v.body_type,
+          engine: v.engine, drivetrain: v.drivetrain, transmission: v.transmission, fuelType: v.fuel_type,
+        })) { if (val) edited.add(k); }
       }
       setLoading(false);
     })();
@@ -319,6 +439,21 @@ export function InspectionWizardScreen({
         setStartingPrice(data.startingPrice); setReservePrice(data.reservePrice);
         if (data.startingPrice || data.reservePrice) setPricesTouched(true);
         setNotes(data.notes ?? "");
+        setBodyType(data.bodyType ?? ""); setEngine(data.engine ?? ""); setDrivetrain(data.drivetrain ?? "");
+        if (data.transmission === "automatic" || data.transmission === "manual") setTransmission(data.transmission);
+        if (data.fuelType === "petrol" || data.fuelType === "diesel" || data.fuelType === "hybrid" || data.fuelType === "electric") setFuelType(data.fuelType);
+        setMarketSpec(data.marketSpec ?? "");
+        setMarketOther(!!data.marketSpec && !MARKET_SPECS.some((m) => m.value === data.marketSpec));
+        setMakeOther(!!data.make && !isKnownMake(data.make));
+        setModelOther(!!data.model && !isKnownModel(data.make, data.model));
+        // Don't re-decode a VIN we already auto-saved past.
+        if (data.vin) lastDecodedVinRef.current = data.vin.trim().toUpperCase();
+        // Protect drafted values from a later VIN re-decode (fills blanks only).
+        const edited = manuallyEditedRef.current;
+        for (const [k, val] of Object.entries({
+          make: data.make, model: data.model, year: data.year, bodyType: data.bodyType,
+          engine: data.engine, drivetrain: data.drivetrain, transmission: data.transmission, fuelType: data.fuelType,
+        })) { if (val) edited.add(k); }
         setStep(data.step);
         setRestoredAt(data.ts);
       } catch { /* corrupt payload — skip */ }
@@ -341,27 +476,152 @@ export function InspectionWizardScreen({
       vin, make, model, year, mileage, color, city,
       sellerName, sellerPhone, startingPrice, reservePrice,
       notes,
+      bodyType, engine, drivetrain,
+      transmission: transmission || undefined,
+      fuelType: fuelType || undefined,
+      marketSpec: marketSpec || undefined,
     };
     void AsyncStorage.setItem(autosaveKey, JSON.stringify(payload)).catch(() => {});
   }, [
     autosaveKey, viewMode, incomingId, user, step,
     vin, make, model, year, mileage, color, city,
     sellerName, sellerPhone, startingPrice, reservePrice,
-    notes,
+    notes, bodyType, engine, drivetrain, transmission, fuelType, marketSpec,
   ]);
 
-  // ---- Helpers ------------------------------------------------------
+  // Market spec "Other" → free-text mode (set explicitly on load / restore).
+  const [marketOther, setMarketOther] = useState(false);
 
-  const ensureBucket = useCallback(async () => {
-    try { await supabase.storage.createBucket(STORAGE_BUCKET, { public: true }); } catch { /* already exists */ }
+  // ---- VIN decoder (auto.dev) ---------------------------------------
+  // Mark a field as manually edited so a later VIN decode won't clobber it,
+  // and drop its "Decoded" badge.
+  const markEdited = useCallback((field: string) => {
+    manuallyEditedRef.current.add(field);
+    setDecoded((prev) => {
+      if (!prev[field]) return prev;
+      const cp = { ...prev }; delete cp[field]; return cp;
+    });
   }, []);
+
+  // Apply a decoded VIN to the form — only fields the inspector hasn't touched.
+  // Stable (no state deps): make/model are validated against the DECODED make
+  // (d.make), so there's no stale-closure read, and the decode effect below
+  // can depend on it without re-running per make change.
+  const applyDecoded = useCallback((d: DecodedVin) => {
+    const edited = manuallyEditedRef.current;
+    const next: Record<string, true> = {};
+    // Make + model arrive together from the VIN. Only apply the decoded model
+    // when we also own the make (the inspector hasn't overridden it), so we
+    // never attach a model that belongs to a different make.
+    const ownMake = !edited.has("make");
+    if (ownMake && d.make) { setMake(d.make); setMakeOther(!isKnownMake(d.make)); next.make = true; }
+    if (ownMake && d.model && !edited.has("model")) {
+      setModel(d.model);
+      setModelOther(!isKnownModel(d.make ?? "", d.model));
+      next.model = true;
+    }
+    if (d.year && !edited.has("year")) { setYear(d.year); next.year = true; }
+    if (d.bodyType && !edited.has("bodyType")) { setBodyType(d.bodyType); next.bodyType = true; }
+    if (d.engine && !edited.has("engine")) { setEngine(d.engine); next.engine = true; }
+    if (d.drivetrain && !edited.has("drivetrain")) { setDrivetrain(d.drivetrain); next.drivetrain = true; }
+    if (d.transmission && !edited.has("transmission")) { setTransmission(d.transmission); next.transmission = true; }
+    if (d.fuelType && !edited.has("fuelType")) { setFuelType(d.fuelType); next.fuelType = true; }
+    if (Object.keys(next).length) setDecoded((prev) => ({ ...prev, ...next }));
+  }, []);
+
+  // Debounced auto-decode: fires once the VIN is a valid 17 chars and differs
+  // from the last one handled. Results (incl. misses) are cached per session.
+  // applyDecoded is stable (empty deps), so this never re-runs on a decode.
+  useEffect(() => {
+    if (readOnly) { setVinStatus("idle"); return; }
+    const v = vin.trim().toUpperCase();
+    if (!isValidVin(v)) { setVinStatus("idle"); return; }
+    if (v === lastDecodedVinRef.current) return;
+
+    let on = true;
+    const timer = setTimeout(async () => {
+      lastDecodedVinRef.current = v;
+      let data = decodeCacheRef.current.get(v);
+      if (data === undefined) {
+        setVinStatus("decoding");
+        const res = await decodeVin(v);
+        data = res.ok ? (res.data ?? null) : null;
+        decodeCacheRef.current.set(v, data);
+      }
+      if (!on) return;
+      if (!data) { setVinStatus("fail"); return; }
+      applyDecoded(data);
+      setVinStatus("ok");
+    }, 500);
+    return () => { on = false; clearTimeout(timer); };
+  }, [vin, readOnly, applyDecoded]);
+
+  // ---- Make / Model / Market pickers --------------------------------
+  const onSelectMake = useCallback((value: string) => {
+    markEdited("make");
+    markEdited("model");
+    setMakePickerOpen(false);
+    setMakeOther(false);
+    setMake(value);
+    // Changing make invalidates the model unless it's still valid for the new make.
+    setModel((prevModel) => (isKnownModel(value, prevModel) ? prevModel : ""));
+    setModelOther(false);
+  }, [markEdited]);
+
+  const onMakeOther = useCallback(() => {
+    markEdited("make");
+    setMakePickerOpen(false);
+    setMakeOther(true);
+    setMake("");
+    setModel(""); setModelOther(true); markEdited("model");
+  }, [markEdited]);
+
+  const onSelectModel = useCallback((value: string) => {
+    markEdited("model");
+    setModelPickerOpen(false);
+    setModelOther(false);
+    setModel(value);
+  }, [markEdited]);
+
+  const onModelOther = useCallback(() => {
+    markEdited("model");
+    setModelPickerOpen(false);
+    setModelOther(true);
+    setModel("");
+  }, [markEdited]);
+
+  // Option lists for the searchable pickers.
+  const makeOptions = useMemo<SelectOption[]>(
+    () => ALL_MAKES.map((m, i) => ({
+      value: m.value,
+      label: m.label ?? m.value,
+      keywords: [m.value.toLowerCase(), ...(m.aliases ?? []), ...(m.label ? [m.label.toLowerCase()] : [])],
+      group: i < POPULAR_MAKES.length ? t("details.makePopular") : t("details.makeAll"),
+    })),
+    [t],
+  );
+  const modelOptions = useMemo<SelectOption[]>(
+    () => modelsForMake(make).map((m) => ({ value: m, label: m })),
+    [make],
+  );
+  const marketOptions = useMemo<SelectOption[]>(
+    () => MARKET_SPECS.map((m) => ({ value: m.value, label: t(m.tkey) })),
+    [t],
+  );
+  // Display helpers for the select boxes (canonical value → friendly label).
+  const makeDisplay = useMemo(() => (make ? (ALL_MAKES.find((m) => m.value === make)?.label ?? make) : ""), [make]);
+  const marketDisplay = useMemo(() => {
+    const found = MARKET_SPECS.find((m) => m.value === marketSpec);
+    return found ? t(found.tkey) : marketSpec;
+  }, [marketSpec, t]);
+
+  // ---- Helpers ------------------------------------------------------
 
   const uploadOne = useCallback(async (
     slotKey: string,
     asset: { uri: string },
     prefix: "photos" | "documents" | "other" | "damages",
   ) => {
-    await ensureBucket();
     const ts  = Date.now();
     const safe = slotKey.replace(/[^a-z0-9-]+/gi, "_").toLowerCase();
     // On web the asset is already a blob: object-URL from the file input —
@@ -382,7 +642,7 @@ export function InspectionWizardScreen({
     const { data: publicUrl } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(key);
     console.log(`[upload] ${slotKey} OK -> ${publicUrl.publicUrl.slice(0, 70)}`);
     return publicUrl.publicUrl;
-  }, [ensureBucket, user]);
+  }, [user]);
 
   const takePhoto = async (slotKey: string, kind: UploadKind) => {
     if (readOnly) return;
@@ -499,6 +759,11 @@ export function InspectionWizardScreen({
       setStep(1);
       return;
     }
+    if (!marketSpec.trim()) {
+      notify(t("submit.marketSpecReq"), t("submit.marketSpecReqBody"));
+      setStep(1);
+      return;
+    }
     setSubmitting(true);
     try {
       let vehicleId = vehicle.id;
@@ -518,8 +783,12 @@ export function InspectionWizardScreen({
         exterior_color: color || null,
         location_city: city || "Dubai",
         location_country: "UAE",
-        fuel_type: vehicle.fuel_type ?? "petrol",
-        transmission: vehicle.transmission ?? "automatic",
+        fuel_type: fuelType || vehicle.fuel_type || "petrol",
+        transmission: transmission || vehicle.transmission || "automatic",
+        body_type: bodyType.trim() || null,
+        engine: engine.trim() || null,
+        drivetrain: drivetrain.trim() || null,
+        market_spec: marketSpec.trim() || null,
         status: nextStatus,
         seller_name: sellerName || vehicle.seller_name || "Walk-in",
         seller_phone: sellerPhone || vehicle.seller_phone || "+971-",
@@ -555,9 +824,9 @@ export function InspectionWizardScreen({
         .map(([slot, p], i) => ({
           vehicle_id: vehicleId!,
           url: p.remote!,
-          category:   slot.startsWith("interior") ? "interior" : slot === "engine" ? "engine" : slot === "trunk" ? "interior" : "exterior",
+          category:   PHOTO_SLOT_BY_KEY[slot]?.category ?? "exterior",
           sort_order: i,
-          caption:    PHOTO_SLOTS.find((s) => s.key === slot)?.label ?? slot,
+          caption:    PHOTO_SLOT_BY_KEY[slot]?.label ?? slot,
         }));
 
       // Only persist documents that finished uploading to Storage — a local
@@ -572,13 +841,18 @@ export function InspectionWizardScreen({
           caption:    DOC_SLOTS.find((s) => s.key === slot)?.label ?? slot,
         }));
 
-      // Additional photos — anything noteworthy beyond the 12 required shots.
+      // Additional photos — anything noteworthy beyond the required shots.
+      // NOTE: the vehicle_photos.category enum has no 'other' value
+      // (exterior/interior/engine/undercarriage/documents/damage/paint_thickness),
+      // so these are stored as 'exterior' (they still show in the buyer gallery,
+      // which groups every non-paint_thickness photo). sort_order 200+ keeps them
+      // after the required shots so they never become the card thumbnail.
       const otherRows = otherPhotos
         .filter((p) => !!p.remote)
         .map((p, i) => ({
           vehicle_id: vehicleId!,
           url: p.remote!,
-          category: "other",
+          category: "exterior",
           sort_order: 200 + i,
           caption:  `Additional photo ${i + 1}`,
         }));
@@ -670,7 +944,7 @@ export function InspectionWizardScreen({
   if (loading) return <Spinner label={t("wiz.loadingVehicle")} />;
 
   const currentStep = STEPS.find((s) => s.n === step)!;
-  const photoProgress = Object.keys(photos).length / PHOTO_SLOTS.length;
+  const photoProgress = Object.keys(photos).length / TOTAL_PHOTO_SLOTS;
   const docProgress   = Object.keys(docs).length / DOC_SLOTS.length;
   const damagedPanelsWithoutPhoto = Object.entries(damages)
     .filter(([, d]) => d.level !== "none" && !d.photoUrl).length;
@@ -720,6 +994,10 @@ export function InspectionWizardScreen({
                 setMileage(""); setColor(""); setCity("Dubai");
                 setSellerName(""); setSellerPhone("");
                 setStartingPrice(""); setReservePrice(""); setNotes("");
+                setBodyType(""); setEngine(""); setDrivetrain("");
+                setTransmission(""); setFuelType(""); setMarketSpec("");
+                setMakeOther(false); setModelOther(false); setMarketOther(false);
+                setDecoded({}); manuallyEditedRef.current = new Set(); lastDecodedVinRef.current = "";
                 setStep(1); setRestoredAt(null);
               }}
             >
@@ -750,16 +1028,85 @@ export function InspectionWizardScreen({
 
         {step === 1 && (
           <Card>
-            <Field label={t("details.vin")} required><TextInput value={vin} onChangeText={setVin} autoCapitalize="characters" maxLength={17} style={styles.input} editable={!readOnly} placeholder="WBA1234567890XXXX" placeholderTextColor={theme.colors.textLight} /></Field>
+            {/* VIN — auto-decodes via auto.dev once 17 valid chars are entered. */}
+            <Field
+              label={t("details.vin")}
+              required
+              badge={
+                vinStatus === "decoding" ? (
+                  <View style={styles.decodingBadge}>
+                    <ActivityIndicator size="small" color={theme.colors.brand} />
+                    <Text style={styles.decodingText}>{t("details.vinDecoding")}</Text>
+                  </View>
+                ) : vinStatus === "ok" ? <DecodedBadge t={t} /> : null
+              }
+            >
+              <TextInput value={vin} onChangeText={(v) => setVin(v.toUpperCase())} autoCapitalize="characters" maxLength={17} style={styles.input} editable={!readOnly} placeholder="WBA1234567890XXXX" placeholderTextColor={theme.colors.textLight} />
+            </Field>
+            {vinStatus === "fail" && !readOnly && (
+              <Text style={styles.vinFailText}>{t("details.vinDecodeFail")}</Text>
+            )}
+
             <View style={{ flexDirection: "row", gap: 10 }}>
-              <Field label={t("details.make")} required style={{ flex: 1 }}><TextInput value={make} onChangeText={setMake} style={styles.input} editable={!readOnly} placeholder="BMW" placeholderTextColor={theme.colors.textLight} /></Field>
-              <Field label={t("details.year")} required style={{ flex: 1 }}><TextInput value={year} onChangeText={setYear} keyboardType="number-pad" style={styles.input} editable={!readOnly} placeholder="2023" placeholderTextColor={theme.colors.textLight} /></Field>
+              <Field label={t("details.make")} required style={{ flex: 1 }} badge={decoded.make ? <DecodedBadge t={t} /> : null}>
+                {makeOther ? (
+                  <View>
+                    <TextInput value={make} onChangeText={(v) => { markEdited("make"); setMake(v); }} style={styles.input} editable={!readOnly} placeholder={t("details.otherMakePlaceholder")} placeholderTextColor={theme.colors.textLight} />
+                    {!readOnly && <Pressable onPress={() => { setMakeOther(false); setMakePickerOpen(true); }} hitSlop={6}><Text style={styles.pickFromList}>{t("details.pickFromList")}</Text></Pressable>}
+                  </View>
+                ) : (
+                  <SelectField value={makeDisplay} placeholder={t("details.makeSelect")} onPress={() => setMakePickerOpen(true)} disabled={readOnly} />
+                )}
+              </Field>
+              <Field label={t("details.year")} required style={{ flex: 1 }} badge={decoded.year ? <DecodedBadge t={t} /> : null}>
+                <TextInput value={year} onChangeText={(v) => { markEdited("year"); setYear(v.replace(/[^0-9]/g, "")); }} keyboardType="number-pad" maxLength={4} style={styles.input} editable={!readOnly} placeholder="2023" placeholderTextColor={theme.colors.textLight} />
+              </Field>
             </View>
-            <Field label={t("details.model")} required><TextInput value={model} onChangeText={setModel} style={styles.input} editable={!readOnly} placeholder="X5" placeholderTextColor={theme.colors.textLight} /></Field>
+
+            <Field label={t("details.model")} required badge={decoded.model ? <DecodedBadge t={t} /> : null}>
+              {(modelOther || makeOther || modelOptions.length === 0) ? (
+                <View>
+                  <TextInput value={model} onChangeText={(v) => { markEdited("model"); setModel(v); }} style={styles.input} editable={!readOnly} placeholder={make ? t("details.otherModelPlaceholder") : t("details.modelSelectFirst")} placeholderTextColor={theme.colors.textLight} />
+                  {!readOnly && !makeOther && modelOptions.length > 0 && (
+                    <Pressable onPress={() => { setModelOther(false); setModelPickerOpen(true); }} hitSlop={6}><Text style={styles.pickFromList}>{t("details.pickFromList")}</Text></Pressable>
+                  )}
+                </View>
+              ) : (
+                <SelectField value={model} placeholder={make ? t("details.modelSelect") : t("details.modelSelectFirst")} onPress={() => setModelPickerOpen(true)} disabled={readOnly || !make} />
+              )}
+            </Field>
+
             <View style={{ flexDirection: "row", gap: 10 }}>
               <Field label={t("details.mileage")} style={{ flex: 1 }}><TextInput value={mileage} onChangeText={setMileage} keyboardType="number-pad" style={styles.input} editable={!readOnly} placeholder="42 000" placeholderTextColor={theme.colors.textLight} /></Field>
               <Field label={t("details.color")} style={{ flex: 1 }}><TextInput value={color} onChangeText={setColor} style={styles.input} editable={!readOnly} placeholder={t("details.colorExample")} placeholderTextColor={theme.colors.textLight} /></Field>
             </View>
+
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <Field label={t("details.bodyType")} style={{ flex: 1 }} badge={decoded.bodyType ? <DecodedBadge t={t} /> : null}><TextInput value={bodyType} onChangeText={(v) => { markEdited("bodyType"); setBodyType(v); }} style={styles.input} editable={!readOnly} placeholder={t("details.bodyTypeExample")} placeholderTextColor={theme.colors.textLight} /></Field>
+              <Field label={t("details.engine")} style={{ flex: 1 }} badge={decoded.engine ? <DecodedBadge t={t} /> : null}><TextInput value={engine} onChangeText={(v) => { markEdited("engine"); setEngine(v); }} style={styles.input} editable={!readOnly} placeholder={t("details.engineExample")} placeholderTextColor={theme.colors.textLight} /></Field>
+            </View>
+
+            <Field label={t("details.transmission")} badge={decoded.transmission ? <DecodedBadge t={t} /> : null}>
+              <PillGroup options={TRANSMISSIONS} value={transmission} onChange={(v) => { markEdited("transmission"); setTransmission(v as Transmission); }} render={(v) => t(`transmission.${v}`)} disabled={readOnly} />
+            </Field>
+
+            <Field label={t("details.fuelType")} badge={decoded.fuelType ? <DecodedBadge t={t} /> : null}>
+              <PillGroup options={FUEL_TYPES} value={fuelType} onChange={(v) => { markEdited("fuelType"); setFuelType(v as FuelType); }} render={(v) => t(`fuel.${v}`)} disabled={readOnly} />
+            </Field>
+
+            <Field label={t("details.drivetrain")} badge={decoded.drivetrain ? <DecodedBadge t={t} /> : null}><TextInput value={drivetrain} onChangeText={(v) => { markEdited("drivetrain"); setDrivetrain(v); }} style={styles.input} editable={!readOnly} placeholder={t("details.drivetrainExample")} placeholderTextColor={theme.colors.textLight} /></Field>
+
+            <Field label={t("details.marketSpec")} required>
+              {marketOther ? (
+                <View>
+                  <TextInput value={marketSpec} onChangeText={setMarketSpec} style={styles.input} editable={!readOnly} placeholder={t("details.marketSpecOther")} placeholderTextColor={theme.colors.textLight} />
+                  {!readOnly && <Pressable onPress={() => { setMarketOther(false); setMarketSpec(""); setMarketPickerOpen(true); }} hitSlop={6}><Text style={styles.pickFromList}>{t("details.pickFromList")}</Text></Pressable>}
+                </View>
+              ) : (
+                <SelectField value={marketDisplay} placeholder={t("details.marketSpecSelect")} onPress={() => setMarketPickerOpen(true)} disabled={readOnly} />
+              )}
+            </Field>
+
             <Field label={t("details.city")}><TextInput value={city} onChangeText={setCity} style={styles.input} editable={!readOnly} /></Field>
             <View style={{ flexDirection: "row", gap: 10 }}>
               <Field label={t("details.sellerName")} style={{ flex: 1 }}><TextInput value={sellerName} onChangeText={setSellerName} style={styles.input} editable={!readOnly} placeholder="Ahmed Al Rashid" placeholderTextColor={theme.colors.textLight} /></Field>
@@ -819,46 +1166,109 @@ export function InspectionWizardScreen({
             <Text style={styles.priceHint}>
               {t("details.pricingHint")}
             </Text>
+
+            {/* Searchable dropdowns (Make / Model / Market spec). */}
+            <SearchableSelect
+              visible={makePickerOpen}
+              title={t("details.makeSelect")}
+              options={makeOptions}
+              searchPlaceholder={t("common.search")}
+              emptyLabel={t("common.noResults")}
+              otherLabel={t("details.otherMake")}
+              selected={make}
+              onSelect={onSelectMake}
+              onSelectOther={onMakeOther}
+              onClose={() => setMakePickerOpen(false)}
+            />
+            <SearchableSelect
+              visible={modelPickerOpen}
+              title={t("details.modelSelect")}
+              options={modelOptions}
+              searchPlaceholder={t("common.search")}
+              emptyLabel={t("common.noResults")}
+              otherLabel={t("details.otherModel")}
+              selected={model}
+              onSelect={onSelectModel}
+              onSelectOther={onModelOther}
+              onClose={() => setModelPickerOpen(false)}
+            />
+            <SearchableSelect
+              visible={marketPickerOpen}
+              title={t("details.marketSpec")}
+              options={marketOptions}
+              searchPlaceholder={t("common.search")}
+              emptyLabel={t("common.noResults")}
+              otherLabel={t("details.marketOtherOption")}
+              selected={marketSpec}
+              onSelect={(v) => { setMarketPickerOpen(false); setMarketOther(false); setMarketSpec(v); }}
+              onSelectOther={() => { setMarketPickerOpen(false); setMarketOther(true); setMarketSpec(""); }}
+              onClose={() => setMarketPickerOpen(false)}
+            />
           </Card>
         )}
 
         {step === 2 && (
           <View>
-            <ProgressBar value={photoProgress} label={t("photos.progress", { done: Object.keys(photos).length, total: PHOTO_SLOTS.length })} />
+            <ProgressBar value={photoProgress} label={t("photos.progress", { done: Object.keys(photos).length, total: TOTAL_PHOTO_SLOTS })} />
             <Text style={styles.tip}>{t("photos.tip")}</Text>
-            <View style={styles.photoGrid}>
-              {PHOTO_SLOTS.map((s) => (
-                <Pressable
-                  key={s.key}
-                  onPress={() => takePhoto(s.key, "photo")}
-                  style={({ pressed }) => [
-                    styles.photoTile,
-                    photos[s.key] && styles.photoTileDone,
-                    pressed && { opacity: 0.92 },
-                  ]}
-                  disabled={readOnly || uploading !== null}
-                >
-                  {photos[s.key] ? (
-                    <>
-                      <Image source={{ uri: photos[s.key].local }} style={StyleSheet.absoluteFill} contentFit="cover" />
-                      <View style={styles.photoOverlay}>
-                        <Icon
-                          name={photos[s.key].remote ? "checkmark" : "cloud-upload-outline"}
-                          size={14}
-                          color={theme.colors.white}
-                        />
-                      </View>
-                    </>
-                  ) : (
-                    <View style={styles.photoEmpty}>
-                      <Icon name="camera" size={22} color={theme.colors.textLight} />
-                      <Text style={styles.photoLabel}>{t(s.tkey)}</Text>
-                      {uploading === s.key && <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginTop: 4 }} />}
+
+            {PHOTO_SECTIONS.map((sec) => {
+              const done = sec.slots.filter((sl) => photos[sl.key]).length;
+              const total = sec.slots.length;
+              const open = openSections[sec.key] ?? false;
+              const complete = done === total;
+              return (
+                <View key={sec.key} style={styles.photoSection}>
+                  <Pressable
+                    onPress={() => setOpenSections((o) => ({ ...o, [sec.key]: !open }))}
+                    style={({ pressed }) => [styles.photoSectionHeader, pressed && { opacity: 0.92 }]}
+                  >
+                    <Icon name={sec.icon} size={18} color={complete ? theme.colors.success : theme.colors.brand} />
+                    <Text style={styles.photoSectionTitle}>{t(sec.tkey)}</Text>
+                    <View style={[styles.photoSectionCount, complete && styles.photoSectionCountDone]}>
+                      {complete && <Icon name="checkmark" size={11} color={theme.colors.white} />}
+                      <Text style={[styles.photoSectionCountText, complete && { color: theme.colors.white }]}>{done}/{total}</Text>
+                    </View>
+                    <Icon name={open ? "chevron-up" : "chevron-down"} size={18} color={theme.colors.textMuted} />
+                  </Pressable>
+                  {open && (
+                    <View style={[styles.photoGrid, styles.photoSectionGrid]}>
+                      {sec.slots.map((s) => (
+                        <Pressable
+                          key={s.key}
+                          onPress={() => takePhoto(s.key, "photo")}
+                          style={({ pressed }) => [
+                            styles.photoTile,
+                            photos[s.key] && styles.photoTileDone,
+                            pressed && { opacity: 0.92 },
+                          ]}
+                          disabled={readOnly || uploading !== null}
+                        >
+                          {photos[s.key] ? (
+                            <>
+                              <Image source={{ uri: photos[s.key].local }} style={StyleSheet.absoluteFill} contentFit="cover" />
+                              <View style={styles.photoOverlay}>
+                                <Icon
+                                  name={photos[s.key].remote ? "checkmark" : "cloud-upload-outline"}
+                                  size={14}
+                                  color={theme.colors.white}
+                                />
+                              </View>
+                            </>
+                          ) : (
+                            <View style={styles.photoEmpty}>
+                              <Icon name="camera" size={22} color={theme.colors.textLight} />
+                              <Text style={styles.photoLabel}>{t(s.tkey)}</Text>
+                              {uploading === s.key && <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginTop: 4 }} />}
+                            </View>
+                          )}
+                        </Pressable>
+                      ))}
                     </View>
                   )}
-                </Pressable>
-              ))}
-            </View>
+                </View>
+              );
+            })}
 
             {/* Additional photos — anything noteworthy beyond the 12 required */}
             <View style={styles.divider} />
@@ -1117,7 +1527,7 @@ export function InspectionWizardScreen({
             </Card>
 
             <View style={styles.summaryRow}>
-              <SummaryCard icon="camera-outline"      value={`${Object.keys(photos).length}/${PHOTO_SLOTS.length}`} label={t("review.photos")}  complete={Object.keys(photos).length === PHOTO_SLOTS.length} />
+              <SummaryCard icon="camera-outline"      value={`${Object.keys(photos).length}/${TOTAL_PHOTO_SLOTS}`} label={t("review.photos")}  complete={Object.keys(photos).length === TOTAL_PHOTO_SLOTS} />
               <SummaryCard icon="images-outline"      value={String(otherPhotos.length)}                            label={t("review.other")} />
               <SummaryCard icon="warning-outline"     value={String(Object.values(damages).filter((d) => d.level !== "none").length)} label={t("review.damages")} />
               <SummaryCard icon="folder-open-outline" value={`${Object.keys(docs).length}/${DOC_SLOTS.length}`}     label={t("review.docs")}    complete={Object.keys(docs).length === DOC_SLOTS.length} />
@@ -1253,11 +1663,57 @@ function SummaryCard({ icon, value, label, complete }: { icon: string; value: st
   );
 }
 
-function Field({ label, required, style, children }: { label: string; required?: boolean; style?: object; children: React.ReactNode }) {
+function Field({ label, required, badge, style, children }: { label: string; required?: boolean; badge?: React.ReactNode; style?: object; children: React.ReactNode }) {
   return (
     <View style={[{ marginBottom: 12 }, style]}>
-      <Text style={styles.label}>{label}{required && <Text style={{ color: theme.colors.error }}>  *</Text>}</Text>
+      <View style={styles.fieldLabelRow}>
+        <Text style={[styles.label, { marginBottom: 0 }]}>{label}{required && <Text style={{ color: theme.colors.error }}>  *</Text>}</Text>
+        {badge}
+      </View>
       {children}
+    </View>
+  );
+}
+
+// "Decoded" pill shown next to a field auto-filled from the VIN decoder.
+function DecodedBadge({ t }: { t: TFunc }) {
+  return (
+    <View style={styles.decodedBadge}>
+      <Icon name="checkmark-circle" size={10} color={theme.colors.success} />
+      <Text style={styles.decodedBadgeText}>{t("details.vinDecoded")}</Text>
+    </View>
+  );
+}
+
+// Input-styled pressable that opens a SearchableSelect sheet.
+function SelectField({ value, placeholder, onPress, disabled }: { value?: string; placeholder: string; onPress: () => void; disabled?: boolean }) {
+  return (
+    <Pressable
+      onPress={disabled ? undefined : onPress}
+      style={({ pressed }) => [styles.input, styles.selectInput, disabled && styles.selectDisabled, pressed && !disabled && { opacity: 0.9 }]}
+    >
+      <Text style={[styles.selectValue, !value && styles.selectPlaceholder]} numberOfLines={1}>{value || placeholder}</Text>
+      <Icon name="chevron-down" size={16} color={disabled ? theme.colors.textLight : theme.colors.textMuted} />
+    </Pressable>
+  );
+}
+
+// Inline single-select pill group for short enums (transmission / fuel).
+function PillGroup({ options, value, onChange, render, disabled }: { options: readonly string[]; value: string; onChange: (v: string) => void; render: (v: string) => string; disabled?: boolean }) {
+  return (
+    <View style={styles.pillRow}>
+      {options.map((o) => {
+        const sel = o === value;
+        return (
+          <Pressable
+            key={o}
+            onPress={disabled ? undefined : () => onChange(o)}
+            style={[styles.pill, sel && styles.pillSelected, disabled && !sel && { opacity: 0.55 }]}
+          >
+            <Text style={[styles.pillText, sel && styles.pillTextSelected]}>{render(o)}</Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -1384,6 +1840,37 @@ const styles = StyleSheet.create({
   // Forms
   label: { fontSize: 11, fontWeight: "800", color: theme.colors.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 },
   input: { height: 46, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.border, paddingHorizontal: 14, fontSize: 14, color: theme.colors.text, backgroundColor: theme.colors.white },
+  fieldLabelRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6, minHeight: 16 },
+
+  // VIN decoder badges
+  decodedBadge: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, paddingVertical: 2, borderRadius: theme.radius.full, backgroundColor: theme.colors.successBg },
+  decodedBadgeText: { fontSize: 9, fontWeight: "800", color: theme.colors.success, textTransform: "uppercase", letterSpacing: 0.4 },
+  decodingBadge: { flexDirection: "row", alignItems: "center", gap: 4 },
+  decodingText: { fontSize: 10, fontWeight: "700", color: theme.colors.brand, textTransform: "uppercase", letterSpacing: 0.4 },
+  vinFailText: { fontSize: 12, color: theme.colors.warning, fontWeight: "600", marginTop: -4, marginBottom: 12 },
+
+  // Select (dropdown) field
+  selectInput: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  selectDisabled: { backgroundColor: theme.colors.bgAlt },
+  selectValue: { flex: 1, fontSize: 14, color: theme.colors.text },
+  selectPlaceholder: { color: theme.colors.textLight },
+  pickFromList: { fontSize: 11, fontWeight: "700", color: theme.colors.brand, marginTop: 6 },
+
+  // Enum pill group
+  pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  pill: { paddingHorizontal: 16, minHeight: 40, justifyContent: "center", borderRadius: theme.radius.full, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.white },
+  pillSelected: { borderColor: theme.colors.brand, backgroundColor: theme.colors.brandLight },
+  pillText: { fontSize: 13, fontWeight: "700", color: theme.colors.textMuted },
+  pillTextSelected: { color: theme.colors.brandDark },
+
+  // Photo sections (collapsible)
+  photoSection: { marginBottom: 10, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.lg, overflow: "hidden", backgroundColor: theme.colors.white },
+  photoSectionHeader: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 14, backgroundColor: theme.colors.bgAlt },
+  photoSectionTitle: { flex: 1, fontSize: 14, fontWeight: "800", color: theme.colors.text },
+  photoSectionCount: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 9, paddingVertical: 3, borderRadius: theme.radius.full, backgroundColor: theme.colors.brandLight },
+  photoSectionCountDone: { backgroundColor: theme.colors.success },
+  photoSectionCountText: { fontSize: 11, fontWeight: "800", color: theme.colors.brand },
+  photoSectionGrid: { padding: 12 },
   priceHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8, marginBottom: 8 },
   priceHeaderText: { fontSize: 12, fontWeight: "800", color: theme.colors.brand, textTransform: "uppercase", letterSpacing: 0.5 },
   priceHint: { fontSize: 11, color: theme.colors.textLight, lineHeight: 16, marginTop: 4 },
