@@ -411,7 +411,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                       </View>
                       <View style={inReview ? styles.reviewTag : styles.doneTag}>
                         <Text style={inReview ? styles.reviewTagText : styles.doneTagText}>
-                          {inReview ? t("dash.inReview") : v.status.replace(/_/g, " ")}
+                          {t(`status.${v.status}`)}
                         </Text>
                       </View>
                     </Pressable>
