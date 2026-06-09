@@ -74,3 +74,41 @@ eas build -p android --profile production
   wizard the first time it uploads.
 - Submission writes everything in a single round-trip per table to keep
   the inspector on the road and off WiFi when possible.
+- Access is gated to staff: `RootNavigator` only shows the Dashboard/Wizard when
+  the signed-in user's `profiles.role` is `inspector`/`admin`/`superadmin`
+  (a non-staff account sees an "Inspectors only" screen). RLS also blocks any
+  non-staff writes at the database as a second layer.
+
+## Operations & deployment
+
+### Where credentials / keys live
+- Supabase URL + **publishable** anon key live in `app.json` → `expo.extra`
+  (public by design; read at runtime via `expo-constants`).
+- EAS / Apple signing credentials are managed by EAS — `credentials.json` and
+  `credentials/` are gitignored. Inspect with `eas credentials`.
+- ⚠️ **Security follow-up:** the auto.dev API key used for VIN decode + market
+  valuation was previously hardcoded in `src/lib/valuation.ts`. It must be
+  rotated and moved server-side — see the web repo's
+  `docs/SECURITY_autodev_key.md`.
+
+### Build & submit (EAS)
+```bash
+eas build  -p ios     --profile production
+eas build  -p android --profile production
+eas submit -p ios     --latest
+eas submit -p android --latest
+```
+bundle id / package: `com.xportacar.inspector`. **Status:** flagged 3.2 by
+Apple — staying on **TestFlight** for now, not publicly released.
+
+### OTA updates (when to OTA vs rebuild)
+Full guide in [`docs/OTA_UPDATES.md`](docs/OTA_UPDATES.md). JS/asset changes →
+OTA; native/`app.json`/permission/`expo.version` changes → rebuild. Recent
+JS-only fixes (top-level error boundary, inspector role gate, console cleanup,
+double-submit guard on "Submit for listing") are OTA-compatible but not in the
+current TestFlight build.
+
+### Links
+- Supabase project `klettmjnnttajdyajafn`
+- App Store Connect — inspector app (TestFlight, 3.2 review)
+- Web platform repo: [`xportacar`](https://github.com/djsjwidjdnw/xportacar)

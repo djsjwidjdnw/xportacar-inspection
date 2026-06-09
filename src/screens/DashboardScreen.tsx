@@ -47,6 +47,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
   const [drafts, setDrafts] = useState<DraftRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [submittingId, setSubmittingId] = useState<string | null>(null);
 
   // Pull every saved draft out of AsyncStorage. We scan all keys with
   // the `xpc_inspection_draft:` prefix, parse them, and surface them
@@ -97,22 +98,27 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
   const submitForListing = async (vehicleId: string, summary: string) => {
     const ok = await confirmAsync(t("dash.submitQ"), t("dash.submitBody", { summary }), t("common.submit"));
     if (!ok) return;
-    const { error } = await supabase.from("vehicles").update({ status: "pending_review" }).eq("id", vehicleId);
-    if (error) { notify(t("dash.submitErr"), error.message); return; }
-    // Best-effort: notify the admins that a vehicle is ready for review.
+    setSubmittingId(vehicleId);
     try {
-      const { data: admins } = await supabase.from("profiles").select("id").in("role", ["admin", "superadmin"]);
-      const rows = (admins ?? []) as { id: string }[];
-      if (rows.length) {
-        await supabase.from("notifications").insert(rows.map((a) => ({
-          user_id: a.id, type: "status_update",
-          title: "Vehicle ready for listing", body: `${summary} was submitted for listing.`,
-          data: { vehicle_id: vehicleId },
-        })));
-      }
-    } catch { /* notifications are best-effort */ }
-    notify(t("dash.submitOk"), t("dash.submitOkBody"));
-    await load();
+      const { error } = await supabase.from("vehicles").update({ status: "pending_review" }).eq("id", vehicleId);
+      if (error) { notify(t("dash.submitErr"), error.message); return; }
+      // Best-effort: notify the admins that a vehicle is ready for review.
+      try {
+        const { data: admins } = await supabase.from("profiles").select("id").in("role", ["admin", "superadmin"]);
+        const rows = (admins ?? []) as { id: string }[];
+        if (rows.length) {
+          await supabase.from("notifications").insert(rows.map((a) => ({
+            user_id: a.id, type: "status_update",
+            title: "Vehicle ready for listing", body: `${summary} was submitted for listing.`,
+            data: { vehicle_id: vehicleId },
+          })));
+        }
+      } catch { /* notifications are best-effort */ }
+      notify(t("dash.submitOk"), t("dash.submitOkBody"));
+      await load();
+    } finally {
+      setSubmittingId(null);
+    }
   };
 
   const load = useCallback(async () => {
@@ -419,6 +425,8 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                       <Button
                         label={t("dash.submitForListing")}
                         onPress={() => submitForListing(v.id, `${v.year} ${v.make} ${v.model}`)}
+                        loading={submittingId === v.id}
+                        disabled={submittingId !== null}
                         fullWidth
                         style={{ marginBottom: 10 }}
                       />

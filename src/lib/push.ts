@@ -33,7 +33,6 @@ export async function registerForPush(): Promise<string | null> {
       Constants.appOwnership === "expo" ||
       Constants.executionEnvironment === "storeClient";
     if (isExpoGo) {
-      console.log("[push] running in Expo Go — push registration skipped");
       return null;
     }
 

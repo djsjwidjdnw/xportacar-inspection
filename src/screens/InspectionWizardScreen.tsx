@@ -675,12 +675,11 @@ export function InspectionWizardScreen({
     }
 
     const size = body instanceof Uint8Array ? body.byteLength : body.size;
-    console.log(`[upload] ${slotKey} -> ${key} (${size}b ${contentType})`);
 
     const { error } = await supabase.storage
       .from(STORAGE_BUCKET)
       .upload(key, body, { contentType, upsert: false });
-    if (error) { console.error(`[upload] storage error (${slotKey}):`, JSON.stringify(error)); throw error; }
+    if (error) { if (__DEV__) console.error(`[upload] storage error (${slotKey}):`, JSON.stringify(error)); throw error; }
 
     // Defense-in-depth: confirm the STORED object is non-zero. If it landed
     // empty, delete it and fail so we never persist a vehicle_photos row that
@@ -689,12 +688,11 @@ export function InspectionWizardScreen({
     const stored = await uploadedSize(key);
     if (stored === 0) {
       await supabase.storage.from(STORAGE_BUCKET).remove([key]).catch(() => {});
-      console.error(`[upload] 0-byte object stored for ${slotKey} — removed`);
+      if (__DEV__) console.error(`[upload] 0-byte object stored for ${slotKey} — removed`);
       throw new Error(t("submit.uploadEmptyBody"));
     }
 
     const { data: publicUrl } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(key);
-    console.log(`[upload] ${slotKey} OK -> ${publicUrl.publicUrl.slice(0, 70)} (${stored ?? "?"}b stored)`);
     return publicUrl.publicUrl;
   }, [user, t]);
 
@@ -722,7 +720,6 @@ export function InspectionWizardScreen({
       asset = result.assets[0];
     }
     const localUri = asset.uri;
-    console.log(`[InspectionWizard] takePhoto: got local URI for ${slotKey}: ${localUri.slice(0, 60)}…`);
 
     // STEP 1 — push the local URI into state immediately so the slot shows
     // the captured thumbnail before the upload completes (or even if it
@@ -755,7 +752,6 @@ export function InspectionWizardScreen({
         : kind === "other"  ? "other"
         : "photos";
       const url = await uploadOne(slotKey, asset, prefix);
-      console.log(`[InspectionWizard] takePhoto: upload OK for ${slotKey}: ${url.slice(0, 60)}…`);
       if (kind === "photo") {
         setPhotos((p) => ({ ...p, [slotKey]: { local: localUri, remote: url } }));
       } else if (kind === "paint") {
@@ -772,7 +768,7 @@ export function InspectionWizardScreen({
       }
     } catch (e) {
       const msg = (e as Error).message ?? "Unknown error";
-      console.warn(`[InspectionWizard] takePhoto: upload FAILED for ${slotKey}: ${msg}`);
+      if (__DEV__) console.warn(`[InspectionWizard] takePhoto: upload FAILED for ${slotKey}: ${msg}`);
       notify(t("submit.uploadFailed"), t("submit.uploadFailedBody", { msg }));
     } finally {
       setUploading(null);
@@ -796,7 +792,6 @@ export function InspectionWizardScreen({
 
   // ---- Submit -------------------------------------------------------
   const submit = async () => {
-    console.log("[submit] start", { platform: Platform.OS, hasUser: !!user, userId: user?.id, vehicleId: vehicle.id ?? "(new)" });
     if (!user) { notify(t("submit.signInRequired"), t("submit.signInRequiredBody")); return; }
     if (!vin || !make || !model || !year) {
       notify(t("submit.missingDetails"), t("submit.missingDetailsBody"));
@@ -853,20 +848,17 @@ export function InspectionWizardScreen({
         inspection_notes: notes.trim() || null,
       };
 
-      console.log("[submit] saving vehicle", { mode: vehicleId ? "update" : "insert", status: vehiclePayload.status, inspector_id: vehiclePayload.inspector_id });
       if (vehicleId) {
         const { error } = await supabase.from("vehicles").update(vehiclePayload).eq("id", vehicleId);
-        if (error) { console.error("[submit] vehicle UPDATE error:", JSON.stringify(error)); throw error; }
-        console.log("[submit] vehicle updated OK:", vehicleId);
+        if (error) { if (__DEV__) console.error("[submit] vehicle UPDATE error:", JSON.stringify(error)); throw error; }
       } else {
         const { data, error } = await supabase
           .from("vehicles")
           .insert({ ...vehiclePayload, created_by: user.id })
           .select("id")
           .single();
-        if (error) { console.error("[submit] vehicle INSERT error:", JSON.stringify(error)); throw error; }
+        if (error) { if (__DEV__) console.error("[submit] vehicle INSERT error:", JSON.stringify(error)); throw error; }
         vehicleId = (data as { id: string }).id;
-        console.log("[submit] vehicle inserted OK:", vehicleId);
       }
       if (!vehicleId) throw new Error("Couldn't create vehicle");
 
@@ -923,11 +915,9 @@ export function InspectionWizardScreen({
           }]
         : [];
 
-      console.log("[submit] photos:", { capturedSlots: Object.keys(photos).length, uploaded: photoRows.length, docs: docRows.length, other: otherRows.length, paint: paintRows.length });
       if (photoRows.length + docRows.length + otherRows.length + paintRows.length > 0) {
         const { error } = await supabase.from("vehicle_photos").insert([...photoRows, ...docRows, ...otherRows, ...paintRows]);
-        if (error) { console.error("[submit] vehicle_photos INSERT error:", JSON.stringify(error)); throw error; }
-        console.log("[submit] vehicle_photos inserted OK");
+        if (error) { if (__DEV__) console.error("[submit] vehicle_photos INSERT error:", JSON.stringify(error)); throw error; }
       }
 
       // Damages — now carry photo_url straight onto the vehicle_damages row.
@@ -942,18 +932,15 @@ export function InspectionWizardScreen({
           // URI would be unreadable by the buyer/web condition report.
           photo_url: d.photoUrl && /^https?:\/\//.test(d.photoUrl) ? d.photoUrl : null,
         }));
-      console.log("[submit] damages:", damageRows.length);
       if (damageRows.length > 0) {
         const { error } = await supabase.from("vehicle_damages").insert(damageRows);
-        if (error) { console.error("[submit] vehicle_damages INSERT error:", JSON.stringify(error)); throw error; }
-        console.log("[submit] vehicle_damages inserted OK");
+        if (error) { if (__DEV__) console.error("[submit] vehicle_damages INSERT error:", JSON.stringify(error)); throw error; }
       }
 
       // Submission succeeded — clear the drafts so the dashboard list updates.
       void AsyncStorage.removeItem(autosaveKey).catch(() => {});
       void AsyncStorage.removeItem(AUTOSAVE_KEY_NEW).catch(() => {});
 
-      console.log("[submit] SUCCESS — inspection saved for vehicle", vehicleId);
       // react-native-web's Alert is a no-op, so the original success dialog
       // (with navigation in its button callback) silently did nothing on web —
       // that was the "doesn't submit" bug. Show a web-safe message, then
@@ -964,7 +951,7 @@ export function InspectionWizardScreen({
       navigation.goBack();
     } catch (e) {
       const err = e as { message?: string; details?: string; hint?: string; code?: string };
-      console.error("[submit] FAILED:", JSON.stringify(err));
+      if (__DEV__) console.error("[submit] FAILED:", JSON.stringify(err));
       notify(t("submit.failed"), err?.message || err?.details || err?.hint || t("submit.failedBody"));
     } finally {
       setSubmitting(false);

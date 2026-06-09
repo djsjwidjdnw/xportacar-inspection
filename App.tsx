@@ -5,6 +5,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { AuthProvider } from "./src/lib/auth";
 import { I18nProvider } from "./src/lib/i18n";
 import { RootNavigator } from "./src/navigation";
+import { ErrorBoundary } from "./src/components/ErrorBoundary";
 
 // Language + RTL are managed by I18nProvider (mirrors the buyer app). It
 // reads the inspector's stored/profile locale on launch and applies the
@@ -18,8 +19,10 @@ export default function App() {
       <SafeAreaProvider>
         <AuthProvider>
           <I18nProvider>
-            <StatusBar style="dark" />
-            <RootNavigator />
+            <ErrorBoundary>
+              <StatusBar style="dark" />
+              <RootNavigator />
+            </ErrorBoundary>
           </I18nProvider>
         </AuthProvider>
       </SafeAreaProvider>
