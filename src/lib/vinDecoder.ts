@@ -1,8 +1,8 @@
 // VIN decoder backed by the auto.dev VIN API.
 //
-// Endpoint:  GET https://api.auto.dev/vin/{VIN}
-// Auth:      Authorization: Bearer <key>  (also accepts ?apikey=<key>)
-// We reuse the same embedded key as the valuation engine (auto.dev free tier).
+// Calls the "vin-decoder-proxy" Supabase Edge Function, which proxies
+// GET https://api.auto.dev/vin/{VIN} server-side using AUTODEV_API_KEY. The
+// auto.dev key NEVER ships in the client bundle.
 //
 // The response is parsed DEFENSIVELY — auto.dev returns a flat object
 // ({make, model, body, engine, drive, transmission, ...}) plus a nested
@@ -13,7 +13,7 @@
 // On ANY failure (invalid VIN, 404/422, network, bad JSON) decodeVin resolves
 // to { ok:false } so the caller falls back to manual entry — never throws.
 
-import { DEFAULT_API_KEY } from "./valuation";
+import { supabase } from "./supabase";
 import { canonicalizeMake } from "./vehicleData";
 
 export type Transmission = "automatic" | "manual";
@@ -80,69 +80,63 @@ function normFuel(raw?: string): FuelType | undefined {
  * Decode a VIN via auto.dev. Never throws — returns { ok:false, error } on any
  * problem so the wizard can fall back to manual dropdowns.
  */
-export async function decodeVin(
-  vin: string,
-  apiKey: string = DEFAULT_API_KEY,
-): Promise<VinDecodeResult> {
+export async function decodeVin(vin: string): Promise<VinDecodeResult> {
   const v = vin.trim().toUpperCase();
   if (!isValidVin(v)) return { ok: false, error: "invalid" };
-  if (!apiKey) return { ok: false, error: "unknown" };
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 8000);
+  // The auto.dev key lives in the vin-decoder-proxy Edge Function, not here.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let j: any;
   try {
-    const res = await fetch(`https://api.auto.dev/vin/${encodeURIComponent(v)}?apikey=${encodeURIComponent(apiKey)}`, {
-      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
-      signal: ctrl.signal,
+    const { data, error } = await supabase.functions.invoke("vin-decoder-proxy", {
+      body: { vin: v },
     });
-    clearTimeout(timer);
-
-    if (!res.ok) {
-      if (res.status === 404 || res.status === 422 || res.status === 400) return { ok: false, error: "not_found" };
-      return { ok: false, error: "unknown" };
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const j: any = await res.json();
-    // Some payloads wrap useful bits in a nested `vehicle` object.
-    const nested = j?.vehicle ?? {};
-
-    // Explicit "no match" signals from the API.
-    if (j?.vinValid === false || j?.error || j?.code === "VIN_NOT_FOUND") {
+    if (error) {
+      // The proxy passes the upstream status through; invoke surfaces any
+      // non-2xx (incl. 404/422 not-found) as an error → fall back to manual.
       return { ok: false, error: "not_found" };
     }
-
-    const rawMake = pick(j, "make") ?? pick(nested, "make", "manufacturer");
-    const model   = pick(j, "model") ?? pick(nested, "model");
-    const year    = pick(nested, "year") ?? pick(j, "year", "modelYear", "ModelYear");
-    const body    = pick(j, "body", "bodyType", "bodyClass", "BodyClass", "style");
-    const engine  = pick(j, "engine", "engineDescription") ?? buildEngine(j);
-    const drive   = pick(j, "drive", "drivetrain", "driveType", "DriveType");
-    const fuelRaw = pick(j, "fuel", "fuelType", "fuelTypePrimary", "FuelTypePrimary", "engineFuelType");
-    const transRaw = pick(j, "transmission", "transmissionStyle", "TransmissionStyle");
-    const trim    = pick(j, "trim");
-
-    const data: DecodedVin = {
-      make: rawMake ? canonicalizeMake(rawMake) : undefined,
-      model,
-      year: year ? String(parseInt(year, 10) || year) : undefined,
-      bodyType: body,
-      engine,
-      transmission: normTransmission(transRaw),
-      fuelType: normFuel(fuelRaw),
-      drivetrain: drive,
-      trim,
-    };
-
-    // If literally nothing usable came back, treat as not found.
-    const hasAny = Object.values(data).some((x) => x != null && x !== "");
-    if (!hasAny) return { ok: false, error: "not_found" };
-
-    return { ok: true, data };
-  } catch (e) {
-    clearTimeout(timer);
-    return { ok: false, error: (e as Error)?.name === "AbortError" ? "network" : "network" };
+    j = data;
+  } catch {
+    return { ok: false, error: "network" };
   }
+  if (!j) return { ok: false, error: "not_found" };
+
+  // Some payloads wrap useful bits in a nested `vehicle` object.
+  const nested = j?.vehicle ?? {};
+
+  // Explicit "no match" signals from the API.
+  if (j?.vinValid === false || j?.error || j?.code === "VIN_NOT_FOUND") {
+    return { ok: false, error: "not_found" };
+  }
+
+  const rawMake = pick(j, "make") ?? pick(nested, "make", "manufacturer");
+  const model   = pick(j, "model") ?? pick(nested, "model");
+  const year    = pick(nested, "year") ?? pick(j, "year", "modelYear", "ModelYear");
+  const body    = pick(j, "body", "bodyType", "bodyClass", "BodyClass", "style");
+  const engine  = pick(j, "engine", "engineDescription") ?? buildEngine(j);
+  const drive   = pick(j, "drive", "drivetrain", "driveType", "DriveType");
+  const fuelRaw = pick(j, "fuel", "fuelType", "fuelTypePrimary", "FuelTypePrimary", "engineFuelType");
+  const transRaw = pick(j, "transmission", "transmissionStyle", "TransmissionStyle");
+  const trim    = pick(j, "trim");
+
+  const data: DecodedVin = {
+    make: rawMake ? canonicalizeMake(rawMake) : undefined,
+    model,
+    year: year ? String(parseInt(year, 10) || year) : undefined,
+    bodyType: body,
+    engine,
+    transmission: normTransmission(transRaw),
+    fuelType: normFuel(fuelRaw),
+    drivetrain: drive,
+    trim,
+  };
+
+  // If literally nothing usable came back, treat as not found.
+  const hasAny = Object.values(data).some((x) => x != null && x !== "");
+  if (!hasAny) return { ok: false, error: "not_found" };
+
+  return { ok: true, data };
 }
 
 // Build an engine string from granular fields if no combined string exists.

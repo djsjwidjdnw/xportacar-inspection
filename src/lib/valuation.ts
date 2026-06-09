@@ -1,14 +1,17 @@
 // Vehicle market valuation engine.
 //
-// PRIMARY: fetchMarketValuation() calls the auto.dev listings API (free tier,
-// set VALUATION_API_KEY) with the FULL model string the inspector typed —
-// trims matter ("458 Speciale" ≫ "458 Spider"). Returns real listing
-// min/avg/max + the count as dataPoints (source: "market_data").
+// PRIMARY: getMarketValuation() calls the "valuation-proxy" Supabase Edge
+// Function (which holds the auto.dev key server-side) with the FULL model
+// string — trims matter ("458 Speciale" ≫ "458 Spider") — and aggregates the
+// returned listings into min/avg/max + the count as dataPoints
+// (source: "market_data"). The API key NEVER ships in the client bundle.
 //
 // FALLBACK: estimateValuation() uses a curated reference table + depreciation,
 // mileage and condition adjustments, with a trim multiplier so variants don't
 // collapse to one price (source: "estimate"). Used when no API key is set or
 // the API is down / returns nothing.
+
+import { supabase } from "./supabase";
 
 export type Condition = "excellent" | "good" | "fair" | "poor";
 
@@ -33,10 +36,8 @@ const CURRENT_YEAR = 2026;
 const DEFAULT_KM_PER_YEAR = 15_000;
 const USD_TO_EUR = 0.92;
 
-// Mobile/web-export apps have no server-side env, so the auto.dev key is
-// embedded here (intentional — it ships in the client bundle). The web app
-// uses VALUATION_API_KEY server-side instead.
-export const DEFAULT_API_KEY = "sk_ad_qp5H-dZoZCLFV2QRx4pN0_qA";
+// (auto.dev key removed — the network call now lives in the valuation-proxy
+// Supabase Edge Function so the key never ships in the client bundle.)
 
 // --- Reference table -------------------------------------------------
 // base = approximate EUR price of a recent (~1-year-old) example.
@@ -147,63 +148,60 @@ export function estimateValuation(input: ValuationInput): Valuation {
 }
 
 /**
- * Real market data from the auto.dev listings API (free tier). Returns null
- * on any failure so the caller can fall back to estimateValuation().
- * Pass the FULL model string — trims change the price dramatically.
+ * Aggregate an auto.dev listings payload into a Valuation. Returns null when
+ * the payload has no usable prices. Pure — the network call (and the API key)
+ * live in the valuation-proxy Edge Function, not in this client.
  */
-export async function fetchMarketValuation(
-  input: ValuationInput,
-  apiKey: string = DEFAULT_API_KEY,
-): Promise<Valuation | null> {
-  if (!apiKey) return null;
-  try {
-    const qs = new URLSearchParams({
-      apikey: apiKey,
-      make: input.make,
-      model: input.model, // full string incl. variant/trim
-      year_min: String(input.year),
-      year_max: String(input.year),
-    });
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 6000);
-    const res = await fetch(`https://auto.dev/api/listings?${qs.toString()}`, {
-      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
-      signal: ctrl.signal,
-    });
-    clearTimeout(t);
-    if (!res.ok) return null;
-    // deno-lint-ignore no-explicit-any
-    const data: any = await res.json();
-    const records: unknown[] = data.records ?? data.listings ?? data.data ?? [];
-    const prices = records
-      // deno-lint-ignore no-explicit-any
-      .map((r: any) => Number(typeof r === "object" ? (r.price ?? r.priceUnformatted ?? r.listing_price) : r))
-      .filter((n) => Number.isFinite(n) && n > 1000)
-      .map((usd) => usd * USD_TO_EUR);
-    if (prices.length === 0) return null;
-    const sorted = prices.sort((a, b) => a - b);
-    const avg = sorted.reduce((s, n) => s + n, 0) / sorted.length;
-    const round = (n: number) => Math.round(n / 100) * 100;
-    return {
-      minEur: round(sorted[0]),
-      avgEur: round(avg),
-      maxEur: round(sorted[sorted.length - 1]),
-      confidence: sorted.length >= 10 ? "high" : sorted.length >= 4 ? "medium" : "low",
-      dataPoints: sorted.length,
-      source: "market_data",
-    };
-  } catch {
-    return null;
-  }
+function parseListings(payload: unknown): Valuation | null {
+  const d = (payload ?? {}) as { records?: unknown[]; listings?: unknown[]; data?: unknown[] };
+  const records: unknown[] = d.records ?? d.listings ?? d.data ?? [];
+  const prices = records
+    .map((r) => {
+      if (r && typeof r === "object") {
+        const o = r as Record<string, unknown>;
+        return Number(o.price ?? o.priceUnformatted ?? o.listing_price);
+      }
+      return Number(r);
+    })
+    .filter((n) => Number.isFinite(n) && n > 1000)
+    .map((usd) => usd * USD_TO_EUR);
+  if (prices.length === 0) return null;
+  const sorted = prices.sort((a, b) => a - b);
+  const avg = sorted.reduce((s, n) => s + n, 0) / sorted.length;
+  const round = (n: number) => Math.round(n / 100) * 100;
+  return {
+    minEur: round(sorted[0]),
+    avgEur: round(avg),
+    maxEur: round(sorted[sorted.length - 1]),
+    confidence: sorted.length >= 10 ? "high" : sorted.length >= 4 ? "medium" : "low",
+    dataPoints: sorted.length,
+    source: "market_data",
+  };
 }
 
 /**
- * Convenience: try live market data (embedded API key), fall back to the
- * reference-table estimate. Always resolves to a Valuation — never throws.
+ * Try live market data via the valuation-proxy Edge Function (which holds the
+ * auto.dev key server-side), then fall back to the reference-table estimate.
+ * Always resolves to a Valuation — never throws.
  */
 export async function getMarketValuation(input: ValuationInput): Promise<Valuation> {
-  const live = await fetchMarketValuation(input).catch(() => null);
-  return live ?? estimateValuation(input);
+  try {
+    const { data, error } = await supabase.functions.invoke("valuation-proxy", {
+      body: {
+        make: input.make,
+        model: input.model, // full string incl. variant/trim
+        year: input.year,
+        mileage: input.mileageKm,
+      },
+    });
+    if (!error && data) {
+      const live = parseListings(data);
+      if (live) return live;
+    }
+  } catch {
+    // network / invoke failure — fall through to the offline estimate
+  }
+  return estimateValuation(input);
 }
 
 /** Human label for a valuation's provenance. */
