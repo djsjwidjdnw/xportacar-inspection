@@ -15,6 +15,22 @@
 import { supabase } from "./supabase";
 
 export async function registerForPush(): Promise<string | null> {
+  // Push is intentionally DISABLED until the native builds are configured for
+  // it. The shipped iOS build has NO Push Notifications capability (no
+  // `expo-notifications` config plugin / `aps-environment` entitlement in
+  // app.json), so calling getExpoPushTokenAsync() below drives native
+  // remote-notification registration the binary isn't entitled for — which can
+  // crash the app right after auth (same root cause fixed in the buyer app). A
+  // JS try/catch cannot intercept that native failure, so we don't make the call.
+  //
+  // TO ENABLE PUSH LATER (requires a NATIVE REBUILD, not an OTA): add
+  // "expo-notifications" to app.json `plugins`, add the iOS `aps-environment`
+  // entitlement + `UIBackgroundModes: ["remote-notification"]`, run `eas build`,
+  // and set PUSH_NOTIFICATIONS_ENABLED = true IN THAT SAME BUILD (never OTA this
+  // flag onto an older binary that lacks the entitlement).
+  const PUSH_NOTIFICATIONS_ENABLED = false;
+  if (!PUSH_NOTIFICATIONS_ENABLED) return null;
+
   try {
     // Lazy-import the Expo modules so a missing native module on web /
     // unsupported runtime doesn't blow up the JS bundle import graph.
