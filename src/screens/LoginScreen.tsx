@@ -10,7 +10,7 @@ import { theme } from "../lib/theme";
 import { registerForPush } from "../lib/push";
 import { useTranslation } from "../lib/i18n";
 
-export function LoginScreen() {
+export function LoginScreen({ navigation }: { navigation: { navigate: (s: string) => void } }) {
   const { t } = useTranslation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -91,6 +91,10 @@ export function LoginScreen() {
         </Pressable>
 
         <Text style={styles.foot}>{t("auth.foot")}</Text>
+
+        <Pressable onPress={() => navigation.navigate("Register")} hitSlop={8} style={styles.signUpLink}>
+          <Text style={styles.signUpText}>{t("auth.signUpLink")}</Text>
+        </Pressable>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -129,4 +133,6 @@ const styles = StyleSheet.create({
   },
   btnText:   { color: theme.colors.white, fontSize: 16, fontWeight: "800", letterSpacing: 0.3 },
   foot:      { fontSize: 12, color: theme.colors.textLight, textAlign: "center", marginTop: 24 },
+  signUpLink: { alignSelf: "center", marginTop: 12, paddingVertical: 4 },
+  signUpText: { fontSize: 14, fontWeight: "800", color: theme.colors.brand, textAlign: "center" },
 });

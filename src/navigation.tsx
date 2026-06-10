@@ -3,6 +3,7 @@ import { NavigationContainer, DefaultTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
 import { LoginScreen as LoginScreenImpl } from "./screens/LoginScreen";
+import { RegisterScreen as RegisterScreenImpl } from "./screens/RegisterScreen";
 import { DashboardScreen as DashboardScreenImpl } from "./screens/DashboardScreen";
 import { InspectionWizardScreen as InspectionWizardScreenImpl } from "./screens/InspectionWizardScreen";
 
@@ -42,6 +43,7 @@ const Stack = createNativeStackNavigator();
 
 type AnyScreen = React.ComponentType<Record<string, unknown>>;
 const LoginScreen          = LoginScreenImpl          as unknown as AnyScreen;
+const RegisterScreen       = RegisterScreenImpl       as unknown as AnyScreen;
 const DashboardScreen      = DashboardScreenImpl      as unknown as AnyScreen;
 const InspectionWizard     = InspectionWizardScreenImpl as unknown as AnyScreen;
 
@@ -90,7 +92,10 @@ export function RootNavigator() {
             <Stack.Screen name="NotAuthorized" component={NotAuthorizedScreen} />
           )
         ) : (
-          <Stack.Screen name="Login" component={LoginScreen} />
+          <>
+            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen name="Register" component={RegisterScreen} />
+          </>
         )}
       </Stack.Navigator>
     </NavigationContainer>
