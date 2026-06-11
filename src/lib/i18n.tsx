@@ -149,6 +149,7 @@ const en: Dict = {
   "step.details":   "Details",
   "step.photos":    "Photos",
   "step.damage":    "Damage",
+  "step.paint":     "Paint",
   "step.documents": "Documents",
   "step.review":    "Review",
 
@@ -362,6 +363,26 @@ const en: Dict = {
   // All photos required
   "photos.allRequired":        "All {total} photos are required. {n} remaining.",
 
+  // Step 4 — Paint thickness (per-panel readings). The step tab shows "Paint"
+  // (step.paint, near the other step.* keys); the step header reuses that label.
+  "paint.tip":                 "Measure each panel with the gauge, enter the reading in microns, and photograph the gauge display.",
+  "paint.progress":            "{done} of {total} panels complete",
+  "paint.allRequired":         "{n} of {total} panels still need a reading + photo.",
+  "paint.microns":             "Reading (µm)",
+  "paint.notesPlaceholder":    "Notes (optional) — e.g. repainted, filler suspected",
+  "paint.outOfRange":          "Outside the typical {min}–{max} µm range — double-check the reading.",
+  "review.paint":              "Paint",
+  "paint.panel.front_bumper":       "Front bumper",
+  "paint.panel.hood":               "Hood",
+  "paint.panel.front_left_fender":  "Front-left fender",
+  "paint.panel.front_right_fender": "Front-right fender",
+  "paint.panel.front_left_door":    "Front-left door",
+  "paint.panel.front_right_door":   "Front-right door",
+  "paint.panel.rear_left_door":     "Rear-left door",
+  "paint.panel.rear_right_door":    "Rear-right door",
+  "paint.panel.trunk":              "Trunk",
+  "paint.panel.roof":               "Roof",
+
   // Photo sections + expanded slots
   "photos.section.exterior":      "Exterior",
   "photos.section.interior":      "Interior",
@@ -508,6 +529,7 @@ const de: Dict = {
   "step.details":   "Details",
   "step.photos":    "Fotos",
   "step.damage":    "Schäden",
+  "step.paint":     "Lack",
   "step.documents": "Dokumente",
   "step.review":    "Überprüfung",
 
@@ -706,6 +728,25 @@ const de: Dict = {
 
   "photos.allRequired":        "Alle {total} Fotos sind erforderlich. Noch {n} ausstehend.",
 
+  // Schritt 4 — Lackschichtdicke (Messwert je Teil)
+  "paint.tip":                 "Miss jedes Teil mit dem Messgerät, gib den Wert in Mikrometer ein und fotografiere die Anzeige.",
+  "paint.progress":            "{done} von {total} Teilen abgeschlossen",
+  "paint.allRequired":         "{n} von {total} Teilen benötigen noch Messwert + Foto.",
+  "paint.microns":             "Messwert (µm)",
+  "paint.notesPlaceholder":    "Notizen (optional) — z. B. nachlackiert, Spachtel vermutet",
+  "paint.outOfRange":          "Außerhalb des üblichen Bereichs {min}–{max} µm — Messwert prüfen.",
+  "review.paint":              "Lack",
+  "paint.panel.front_bumper":       "Vordere Stoßstange",
+  "paint.panel.hood":               "Motorhaube",
+  "paint.panel.front_left_fender":  "Kotflügel vorne links",
+  "paint.panel.front_right_fender": "Kotflügel vorne rechts",
+  "paint.panel.front_left_door":    "Tür vorne links",
+  "paint.panel.front_right_door":   "Tür vorne rechts",
+  "paint.panel.rear_left_door":     "Tür hinten links",
+  "paint.panel.rear_right_door":    "Tür hinten rechts",
+  "paint.panel.trunk":              "Kofferraumdeckel",
+  "paint.panel.roof":               "Dach",
+
   "photos.section.exterior":      "Außen",
   "photos.section.interior":      "Innen",
   "photos.section.engine":        "Motor",
@@ -851,6 +892,7 @@ const fr: Dict = {
   "step.details":   "Détails",
   "step.photos":    "Photos",
   "step.damage":    "Dommages",
+  "step.paint":     "Peinture",
   "step.documents": "Documents",
   "step.review":    "Vérification",
 
@@ -1049,6 +1091,25 @@ const fr: Dict = {
 
   "photos.allRequired":        "Les {total} photos sont toutes requises. {n} restante(s).",
 
+  // Étape 4 — Épaisseur de peinture (mesure par panneau)
+  "paint.tip":                 "Mesurez chaque panneau avec la jauge, saisissez la valeur en microns et photographiez l'affichage.",
+  "paint.progress":            "{done} sur {total} panneaux complétés",
+  "paint.allRequired":         "{n} sur {total} panneaux nécessitent encore une mesure + une photo.",
+  "paint.microns":             "Mesure (µm)",
+  "paint.notesPlaceholder":    "Notes (facultatif) — ex. repeint, mastic suspecté",
+  "paint.outOfRange":          "Hors de la plage habituelle {min}–{max} µm — vérifiez la mesure.",
+  "review.paint":              "Peinture",
+  "paint.panel.front_bumper":       "Pare-chocs avant",
+  "paint.panel.hood":               "Capot",
+  "paint.panel.front_left_fender":  "Aile avant gauche",
+  "paint.panel.front_right_fender": "Aile avant droite",
+  "paint.panel.front_left_door":    "Porte avant gauche",
+  "paint.panel.front_right_door":   "Porte avant droite",
+  "paint.panel.rear_left_door":     "Porte arrière gauche",
+  "paint.panel.rear_right_door":    "Porte arrière droite",
+  "paint.panel.trunk":              "Couvercle de coffre",
+  "paint.panel.roof":               "Toit",
+
   "photos.section.exterior":      "Extérieur",
   "photos.section.interior":      "Intérieur",
   "photos.section.engine":        "Moteur",
@@ -1194,6 +1255,7 @@ const ar: Dict = {
   "step.details":   "التفاصيل",
   "step.photos":    "الصور",
   "step.damage":    "الأضرار",
+  "step.paint":     "الطلاء",
   "step.documents": "المستندات",
   "step.review":    "المراجعة",
 
@@ -1391,6 +1453,25 @@ const ar: Dict = {
   "bodyType.truck":            "شاحنة",
 
   "photos.allRequired":        "جميع الصور الـ {total} مطلوبة. المتبقي {n}.",
+
+  // الخطوة 4 — سُمك الطلاء (قراءة لكل قطعة)
+  "paint.tip":                 "قِس كل قطعة بالجهاز، وأدخل القراءة بالميكرون، وصوّر شاشة الجهاز.",
+  "paint.progress":            "اكتملت {done} من {total} قطعة",
+  "paint.allRequired":         "{n} من {total} قطعة لا تزال بحاجة إلى قراءة + صورة.",
+  "paint.microns":             "القراءة (ميكرون)",
+  "paint.notesPlaceholder":    "ملاحظات (اختياري) — مثل: أُعيد طلاؤه، يُشتبه بوجود معجون",
+  "paint.outOfRange":          "خارج النطاق المعتاد {min}–{max} ميكرون — تحقّق من القراءة.",
+  "review.paint":              "الطلاء",
+  "paint.panel.front_bumper":       "الصدّام الأمامي",
+  "paint.panel.hood":               "غطاء المحرك",
+  "paint.panel.front_left_fender":  "الرفرف الأمامي الأيسر",
+  "paint.panel.front_right_fender": "الرفرف الأمامي الأيمن",
+  "paint.panel.front_left_door":    "الباب الأمامي الأيسر",
+  "paint.panel.front_right_door":   "الباب الأمامي الأيمن",
+  "paint.panel.rear_left_door":     "الباب الخلفي الأيسر",
+  "paint.panel.rear_right_door":    "الباب الخلفي الأيمن",
+  "paint.panel.trunk":              "غطاء صندوق الأمتعة",
+  "paint.panel.roof":               "السقف",
 
   "photos.section.exterior":      "الخارج",
   "photos.section.interior":      "الداخل",

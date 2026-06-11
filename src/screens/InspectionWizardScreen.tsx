@@ -55,6 +55,8 @@ export interface AutosavePayload {
   // VIN-decoder / extra attributes (all optional so older drafts still parse).
   bodyType?: string; engine?: string; drivetrain?: string;
   transmission?: string; fuelType?: string; marketSpec?: string;
+  // Per-panel paint-thickness readings (optional so older drafts still parse).
+  paintReadings?: Record<string, { microns: string; photoUrl: string | null; notes: string }>;
 }
 
 export { autosaveKeyFor as inspectionAutosaveKeyFor, AUTOSAVE_KEY_PREFIX as INSPECTION_AUTOSAVE_PREFIX };
@@ -149,8 +151,9 @@ const STEPS = [
   { n: 1, tkey: "step.details",   icon: "document-text-outline" as const },
   { n: 2, tkey: "step.photos",    icon: "camera-outline" as const },
   { n: 3, tkey: "step.damage",    icon: "warning-outline" as const },
-  { n: 4, tkey: "step.documents", icon: "folder-open-outline" as const },
-  { n: 5, tkey: "step.review",    icon: "checkmark-done-outline" as const },
+  { n: 4, tkey: "step.paint",     icon: "color-palette-outline" as const },
+  { n: 5, tkey: "step.documents", icon: "folder-open-outline" as const },
+  { n: 6, tkey: "step.review",    icon: "checkmark-done-outline" as const },
 ] as const;
 
 // Photo capture is organised into collapsible sections. Each slot's `label`
@@ -288,9 +291,33 @@ const DOC_SLOTS = [
   { key: "insurance",     label: "Insurance docs", tkey: "docs.slot.insurance" },
 ] as const;
 
+// Paint-thickness panels — each entry's `key` is the canonical English panel
+// key stored in paint_thickness_readings.panel (read by the web/admin/buyer
+// apps); `tkey` is the translated on-screen label. A typical factory reading
+// is 80-160 microns; values outside PAINT_MICRONS_MIN..MAX are accepted but
+// flagged inline (very low = filler/sanded, very high = repaint/bondo).
+const PAINT_PANELS: ReadonlyArray<{ key: string; tkey: string }> = [
+  { key: "front_bumper",       tkey: "paint.panel.front_bumper" },
+  { key: "hood",               tkey: "paint.panel.hood" },
+  { key: "front_left_fender",  tkey: "paint.panel.front_left_fender" },
+  { key: "front_right_fender", tkey: "paint.panel.front_right_fender" },
+  { key: "front_left_door",    tkey: "paint.panel.front_left_door" },
+  { key: "front_right_door",   tkey: "paint.panel.front_right_door" },
+  { key: "rear_left_door",     tkey: "paint.panel.rear_left_door" },
+  { key: "rear_right_door",    tkey: "paint.panel.rear_right_door" },
+  { key: "trunk",              tkey: "paint.panel.trunk" },
+  { key: "roof",               tkey: "paint.panel.roof" },
+] as const;
+const TOTAL_PAINT_PANELS = PAINT_PANELS.length;
+const PAINT_MICRONS_MIN = 50;
+const PAINT_MICRONS_MAX = 500;
+
+interface PaintReading { microns: string; photoUrl: string | null; notes: string }
+const EMPTY_PAINT_READING: PaintReading = { microns: "", photoUrl: null, notes: "" };
+
 const STORAGE_BUCKET = "vehicle-photos";
 
-type UploadKind = "photo" | "document" | "other" | "damage" | "paint";
+type UploadKind = "photo" | "document" | "other" | "damage" | "paint" | "paint_reading";
 
 interface CapturedPhoto { local: string; remote: string | null }
 
@@ -411,6 +438,12 @@ export function InspectionWizardScreen({
   // from damage panels. Persisted as a vehicle_photos row, category "paint_thickness".
   const [paintThickness, setPaintThickness] = useState<CapturedPhoto | null>(null);
 
+  // Per-panel paint-thickness readings — keyed by canonical English panel key.
+  // Each panel needs a microns value AND a gauge photo before submit; rows go
+  // to the paint_thickness_readings table (separate from the legacy single
+  // paint_thickness vehicle_photos row above).
+  const [paintReadings, setPaintReadings] = useState<Record<string, PaintReading>>({});
+
   // Damage state — record of panel name -> { level, description, photoUrl? }
   const [damages, setDamages] = useState<Record<string, DamageState>>({});
   const [pickerOpen, setPickerOpen] = useState<{ panel: string } | null>(null);
@@ -463,6 +496,22 @@ export function InspectionWizardScreen({
           engine: v.engine, drivetrain: v.drivetrain, transmission: v.transmission, fuelType: v.fuel_type,
         })) { if (val) edited.add(k); }
       }
+      // Pre-fill per-panel paint-thickness readings for an existing vehicle.
+      const { data: paintRows } = await supabase
+        .from("paint_thickness_readings")
+        .select("panel, reading_microns, photo_url, notes")
+        .eq("vehicle_id", incomingId);
+      if (paintRows?.length) {
+        const pr: Record<string, PaintReading> = {};
+        for (const r of paintRows as Array<{ panel: string; reading_microns: number | null; photo_url: string | null; notes: string | null }>) {
+          pr[r.panel] = {
+            microns: r.reading_microns != null ? String(r.reading_microns) : "",
+            photoUrl: r.photo_url ?? null,
+            notes: r.notes ?? "",
+          };
+        }
+        setPaintReadings(pr);
+      }
       setLoading(false);
     })();
   }, [incomingId]);
@@ -499,6 +548,7 @@ export function InspectionWizardScreen({
         setBodyTypeOther(!!data.bodyType && !isKnownBodyType(data.bodyType));
         setMakeOther(!!data.make && !isKnownMake(data.make));
         setModelOther(!!data.model && !isKnownModel(data.make, data.model));
+        if (data.paintReadings) setPaintReadings(data.paintReadings);
         // Don't re-decode a VIN we already auto-saved past.
         if (data.vin) lastDecodedVinRef.current = data.vin.trim().toUpperCase();
         // Protect drafted values from a later VIN re-decode (fills blanks only).
@@ -533,6 +583,7 @@ export function InspectionWizardScreen({
       transmission: transmission || undefined,
       fuelType: fuelType || undefined,
       marketSpec: marketSpec || undefined,
+      paintReadings: Object.keys(paintReadings).length ? paintReadings : undefined,
     };
     void AsyncStorage.setItem(autosaveKey, JSON.stringify(payload)).catch(() => {});
   }, [
@@ -540,6 +591,7 @@ export function InspectionWizardScreen({
     vin, make, model, year, mileage, color, city,
     sellerName, sellerPhone, startingPrice, reservePrice,
     notes, bodyType, engine, drivetrain, transmission, fuelType, marketSpec,
+    paintReadings,
   ]);
 
   // Market spec "Other" → free-text mode (set explicitly on load / restore).
@@ -791,6 +843,9 @@ export function InspectionWizardScreen({
       setPhotos((p) => ({ ...p, [slotKey]: { local: localUri, remote: null } }));
     } else if (kind === "paint") {
       setPaintThickness({ local: localUri, remote: null });
+    } else if (kind === "paint_reading") {
+      // slotKey is "paint_<panelKey>" — patch only the photoUrl (local first).
+      setPaintField(slotKey.replace(/^paint_/, ""), { photoUrl: localUri });
     } else if (kind === "other") {
       setOtherPhotos((arr) => [...arr, { local: localUri, remote: null }]);
     } else if (kind === "damage") {
@@ -818,6 +873,8 @@ export function InspectionWizardScreen({
         setPhotos((p) => ({ ...p, [slotKey]: { local: localUri, remote: url } }));
       } else if (kind === "paint") {
         setPaintThickness({ local: localUri, remote: url });
+      } else if (kind === "paint_reading") {
+        setPaintField(slotKey.replace(/^paint_/, ""), { photoUrl: url });
       } else if (kind === "document") {
         setDocs((d) => ({ ...d, [slotKey]: url }));
       } else if (kind === "other") {
@@ -839,6 +896,10 @@ export function InspectionWizardScreen({
 
   const removeOtherPhoto = (i: number) =>
     setOtherPhotos((arr) => arr.filter((_, idx) => idx !== i));
+
+  // ---- Paint-thickness editor ---------------------------------------
+  const setPaintField = (panel: string, patch: Partial<PaintReading>) =>
+    setPaintReadings((p) => ({ ...p, [panel]: { ...(p[panel] ?? EMPTY_PAINT_READING), ...patch } }));
 
   // ---- Damage editor ------------------------------------------------
   const setDamage = (panel: string, level: DamageLevel, description?: string) => {
@@ -881,6 +942,20 @@ export function InspectionWizardScreen({
     if (remaining > 0) {
       notify(t("photos.allRequired", { total: TOTAL_PHOTO_SLOTS, n: remaining }));
       setStep(2);
+      return;
+    }
+    // Every paint panel needs BOTH a microns value AND a photo. List the
+    // incomplete panels so the inspector knows exactly what's left.
+    const paintIncomplete = PAINT_PANELS.filter((p) => {
+      const r = paintReadings[p.key];
+      return !r || r.microns.trim() === "" || !r.photoUrl;
+    });
+    if (paintIncomplete.length > 0) {
+      notify(
+        t("paint.allRequired", { total: TOTAL_PAINT_PANELS, n: paintIncomplete.length }),
+        paintIncomplete.map((p) => t(p.tkey)).join(", "),
+      );
+      setStep(4);
       return;
     }
     setSubmitting(true);
@@ -1008,6 +1083,28 @@ export function InspectionWizardScreen({
         if (error) { if (__DEV__) console.error("[submit] vehicle_damages INSERT error:", JSON.stringify(error)); throw error; }
       }
 
+      // Paint-thickness readings — one row per panel. The table has a
+      // (vehicle_id, panel) unique constraint, so upsert on that conflict
+      // target keeps re-submission (and editing an existing vehicle) from
+      // duplicating rows. Only remote (uploaded) photo URLs are persisted —
+      // gating already guarantees every panel has one before we get here.
+      const paintReadingRows = PAINT_PANELS.map((p) => {
+        const r = paintReadings[p.key] ?? EMPTY_PAINT_READING;
+        return {
+          vehicle_id: vehicleId!,
+          panel: p.key,
+          reading_microns: Number(r.microns),
+          photo_url: r.photoUrl && /^https?:\/\//.test(r.photoUrl) ? r.photoUrl : null,
+          notes: r.notes.trim() || null,
+        };
+      });
+      if (paintReadingRows.length > 0) {
+        const { error } = await supabase
+          .from("paint_thickness_readings")
+          .upsert(paintReadingRows, { onConflict: "vehicle_id,panel" });
+        if (error) { if (__DEV__) console.error("[submit] paint_thickness_readings UPSERT error:", JSON.stringify(error)); throw error; }
+      }
+
       // Submission succeeded — clear the drafts so the dashboard list updates.
       void AsyncStorage.removeItem(autosaveKey).catch(() => {});
       void AsyncStorage.removeItem(AUTOSAVE_KEY_NEW).catch(() => {});
@@ -1067,6 +1164,23 @@ export function InspectionWizardScreen({
   const damagedPanelsWithoutPhoto = Object.entries(damages)
     .filter(([, d]) => d.level !== "none" && !d.photoUrl).length;
 
+  // Paint-thickness gating — a panel is complete only with BOTH a microns
+  // value AND a captured photo (local URI counts; upload may still be in flight).
+  const paintPanelComplete = (panelKey: string) => {
+    const r = paintReadings[panelKey];
+    return !!r && r.microns.trim() !== "" && !!r.photoUrl;
+  };
+  const paintPanelsComplete = PAINT_PANELS.filter((p) => paintPanelComplete(p.key)).length;
+  const allPaintComplete = paintPanelsComplete === TOTAL_PAINT_PANELS;
+  const paintProgress = paintPanelsComplete / TOTAL_PAINT_PANELS;
+  // Submit is enabled only when every photo slot AND every paint panel is done.
+  const readyToSubmit = allPhotosCaptured && allPaintComplete;
+  // True when a reading is outside the typical 50-500 micron range (warned, not blocked).
+  const paintOutOfRange = (microns: string) => {
+    const n = Number(microns);
+    return microns.trim() !== "" && Number.isFinite(n) && (n < PAINT_MICRONS_MIN || n > PAINT_MICRONS_MAX);
+  };
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: theme.colors.bg }}
@@ -1115,6 +1229,7 @@ export function InspectionWizardScreen({
                 setBodyType(""); setEngine(""); setDrivetrain("");
                 setTransmission(""); setFuelType(""); setMarketSpec("");
                 setMakeOther(false); setModelOther(false); setMarketOther(false); setBodyTypeOther(false);
+                setPaintReadings({});
                 setDecoded({}); manuallyEditedRef.current = new Set(); lastDecodedVinRef.current = "";
                 setStep(1); setRestoredAt(null);
               }}
@@ -1625,6 +1740,89 @@ export function InspectionWizardScreen({
 
         {step === 4 && (
           <View>
+            <ProgressBar value={paintProgress} label={t("paint.progress", { done: paintPanelsComplete, total: TOTAL_PAINT_PANELS })} />
+            {!allPaintComplete && (
+              <View style={[styles.warnBanner, { marginBottom: 12 }]}>
+                <Icon name="color-palette-outline" size={16} color={theme.colors.warning} />
+                <Text style={styles.warnText}>
+                  {t("paint.allRequired", { total: TOTAL_PAINT_PANELS, n: TOTAL_PAINT_PANELS - paintPanelsComplete })}
+                </Text>
+              </View>
+            )}
+            <Text style={styles.tip}>{t("paint.tip")}</Text>
+
+            {PAINT_PANELS.map((panel) => {
+              const r = paintReadings[panel.key] ?? EMPTY_PAINT_READING;
+              const complete = paintPanelComplete(panel.key);
+              const slotKey = `paint_${panel.key}`;
+              const outOfRange = paintOutOfRange(r.microns);
+              return (
+                <View key={panel.key} style={[styles.paintPanelCard, complete && styles.paintPanelCardDone]}>
+                  <View style={styles.paintPanelHeader}>
+                    <Text style={styles.paintPanelName}>{t(panel.tkey)}</Text>
+                    {complete && (
+                      <View style={styles.paintPanelDoneBadge}>
+                        <Icon name="checkmark-circle" size={12} color={theme.colors.success} />
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.paintPanelRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.label}>{t("paint.microns")}</Text>
+                      <TextInput
+                        value={r.microns}
+                        onChangeText={(v) => setPaintField(panel.key, { microns: v.replace(/[^0-9.]/g, "") })}
+                        keyboardType="number-pad"
+                        style={styles.input}
+                        editable={!readOnly}
+                        placeholder="120"
+                        placeholderTextColor={theme.colors.textLight}
+                      />
+                    </View>
+                    <Pressable
+                      onPress={() => takePhoto(slotKey, "paint_reading")}
+                      disabled={readOnly || uploading !== null}
+                      style={({ pressed }) => [
+                        styles.paintReadingPhotoBtn,
+                        r.photoUrl && styles.paintReadingPhotoBtnDone,
+                        pressed && { opacity: 0.85 },
+                      ]}
+                    >
+                      {r.photoUrl ? (
+                        <Image source={{ uri: r.photoUrl }} style={styles.paintReadingThumb} contentFit="cover" />
+                      ) : uploading === slotKey ? (
+                        <ActivityIndicator size="small" color={theme.colors.brand} />
+                      ) : (
+                        <Icon name="camera" size={20} color={theme.colors.brand} />
+                      )}
+                      {r.photoUrl && (
+                        <View style={styles.paintReadingPhotoCheck}>
+                          <Icon name="checkmark" size={11} color={theme.colors.white} />
+                        </View>
+                      )}
+                    </Pressable>
+                  </View>
+                  {outOfRange && (
+                    <Text style={styles.paintWarnText}>
+                      {t("paint.outOfRange", { min: PAINT_MICRONS_MIN, max: PAINT_MICRONS_MAX })}
+                    </Text>
+                  )}
+                  <TextInput
+                    value={r.notes}
+                    onChangeText={(v) => setPaintField(panel.key, { notes: v })}
+                    style={[styles.input, { marginTop: 10 }]}
+                    editable={!readOnly}
+                    placeholder={t("paint.notesPlaceholder")}
+                    placeholderTextColor={theme.colors.textLight}
+                  />
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        {step === 5 && (
+          <View>
             <ProgressBar value={docProgress} label={t("docs.progress", { done: Object.keys(docs).length, total: DOC_SLOTS.length })} />
             <Text style={styles.tip}>{t("docs.tip")}</Text>
             <View style={styles.photoGrid}>
@@ -1657,7 +1855,7 @@ export function InspectionWizardScreen({
           </View>
         )}
 
-        {step === 5 && (
+        {step === 6 && (
           <View>
             <Card>
               <Text style={styles.reviewEyebrow}>{t("review.vehicle")}</Text>
@@ -1681,10 +1879,10 @@ export function InspectionWizardScreen({
             </Card>
 
             <View style={styles.summaryRow}>
-              <SummaryCard icon="camera-outline"      value={`${photosCaptured}/${TOTAL_PHOTO_SLOTS}`} label={t("review.photos")}  complete={allPhotosCaptured} />
-              <SummaryCard icon="images-outline"      value={String(otherPhotos.length)}                            label={t("review.other")} />
-              <SummaryCard icon="warning-outline"     value={String(Object.values(damages).filter((d) => d.level !== "none").length)} label={t("review.damages")} />
-              <SummaryCard icon="folder-open-outline" value={`${Object.keys(docs).length}/${DOC_SLOTS.length}`}     label={t("review.docs")}    complete={Object.keys(docs).length === DOC_SLOTS.length} />
+              <SummaryCard icon="camera-outline"        value={`${photosCaptured}/${TOTAL_PHOTO_SLOTS}`} label={t("review.photos")}  complete={allPhotosCaptured} />
+              <SummaryCard icon="color-palette-outline" value={`${paintPanelsComplete}/${TOTAL_PAINT_PANELS}`} label={t("review.paint")} complete={allPaintComplete} />
+              <SummaryCard icon="warning-outline"       value={String(Object.values(damages).filter((d) => d.level !== "none").length)} label={t("review.damages")} />
+              <SummaryCard icon="folder-open-outline"   value={`${Object.keys(docs).length}/${DOC_SLOTS.length}`}     label={t("review.docs")}    complete={Object.keys(docs).length === DOC_SLOTS.length} />
             </View>
 
             {damagedPanelsWithoutPhoto > 0 && (
@@ -1728,17 +1926,27 @@ export function InspectionWizardScreen({
               </View>
             )}
 
+            {!readOnly && !allPaintComplete && (
+              <View style={[styles.warnBanner, { marginTop: 16, marginBottom: 0 }]}>
+                <Icon name="color-palette-outline" size={16} color={theme.colors.warning} />
+                <Text style={styles.warnText}>
+                  {t("paint.allRequired", { total: TOTAL_PAINT_PANELS, n: TOTAL_PAINT_PANELS - paintPanelsComplete })}
+                </Text>
+              </View>
+            )}
+
             {!readOnly && (
-              // All photo slots are mandatory. While any are missing the button
-              // is greyed out; tapping it still fires submit(), which surfaces
-              // the "{n} remaining" alert and jumps back to the photos step.
+              // All photo slots AND all paint readings are mandatory. While any
+              // are missing the button is greyed out; tapping it still fires
+              // submit(), which surfaces the relevant alert and jumps back to the
+              // first incomplete step.
               <Pressable
                 onPress={submit}
                 disabled={submitting}
-                style={({ pressed }) => [styles.submitShadow, !allPhotosCaptured && styles.submitShadowDisabled, pressed && { opacity: 0.92 }]}
+                style={({ pressed }) => [styles.submitShadow, !readyToSubmit && styles.submitShadowDisabled, pressed && { opacity: 0.92 }]}
               >
                 <LinearGradient
-                  colors={allPhotosCaptured ? [theme.colors.brand, theme.colors.brandDark] : [theme.colors.textLight, theme.colors.textMuted]}
+                  colors={readyToSubmit ? [theme.colors.brand, theme.colors.brandDark] : [theme.colors.textLight, theme.colors.textMuted]}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                   style={styles.submitBtn}
@@ -1748,9 +1956,11 @@ export function InspectionWizardScreen({
                   <Text style={styles.submitText}>
                     {submitting
                       ? t("review.submitting")
-                      : allPhotosCaptured
-                        ? t("review.submit")
-                        : t("photos.allRequired", { total: TOTAL_PHOTO_SLOTS, n: photosRemaining })}
+                      : !allPhotosCaptured
+                        ? t("photos.allRequired", { total: TOTAL_PHOTO_SLOTS, n: photosRemaining })
+                        : !allPaintComplete
+                          ? t("paint.allRequired", { total: TOTAL_PAINT_PANELS, n: TOTAL_PAINT_PANELS - paintPanelsComplete })
+                          : t("review.submit")}
                   </Text>
                 </LinearGradient>
               </Pressable>
@@ -2119,6 +2329,27 @@ const styles = StyleSheet.create({
   },
   paintCaptureText: { color: theme.colors.brand, fontWeight: "800", fontSize: 13 },
   paintThumb: { width: "100%", height: "100%" },
+
+  // Per-panel paint-thickness readings
+  paintPanelCard: {
+    padding: 14, borderRadius: theme.radius.lg, marginBottom: 10,
+    backgroundColor: theme.colors.white, borderWidth: 1, borderColor: theme.colors.border,
+  },
+  paintPanelCardDone: { borderColor: theme.colors.success },
+  paintPanelHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  paintPanelName: { fontSize: 14, fontWeight: "800", color: theme.colors.text },
+  paintPanelDoneBadge: { width: 22, height: 22, borderRadius: 11, backgroundColor: theme.colors.successBg, alignItems: "center", justifyContent: "center" },
+  paintPanelRow: { flexDirection: "row", alignItems: "flex-end", gap: 10 },
+  paintReadingPhotoBtn: {
+    width: 46, height: 46, borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.brandLight,
+    borderWidth: 1, borderColor: theme.colors.brand, borderStyle: "dashed",
+    alignItems: "center", justifyContent: "center", overflow: "hidden",
+  },
+  paintReadingPhotoBtnDone: { borderStyle: "solid", borderColor: theme.colors.success },
+  paintReadingThumb: { width: "100%", height: "100%" },
+  paintReadingPhotoCheck: { position: "absolute", top: 2, right: 2, width: 16, height: 16, borderRadius: 8, backgroundColor: theme.colors.success, alignItems: "center", justifyContent: "center" },
+  paintWarnText: { fontSize: 11, color: theme.colors.warning, fontWeight: "700", marginTop: 6 },
 
   // Car outline
   carOutline: { padding: 12, backgroundColor: theme.colors.bgAlt, borderRadius: theme.radius.lg, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 16, alignItems: "center" },
