@@ -333,6 +333,9 @@ export function InspectionWizardScreen({
   // optional (admin may set it later).
   const [startingPrice, setStartingPrice] = useState("");
   const [reservePrice,  setReservePrice]  = useState("");
+  // Inspector enters prices in AED only; the DB trigger derives EUR at this
+  // fixed rate (must match migration 015's sync_vehicle_eur_from_aed).
+  const AED_PER_EUR = 3.92;
   // Free-text inspector notes → saved to vehicles.inspection_notes so the
   // buyer/web condition report can show them.
   const [notes, setNotes] = useState("");
@@ -393,8 +396,8 @@ export function InspectionWizardScreen({
   const marketEstimate = liveValuation ?? referenceEstimate;
   useEffect(() => {
     if (!marketEstimate || pricesTouched || readOnly) return;
-    setStartingPrice(String(marketEstimate.avgEur));
-    setReservePrice(String(marketEstimate.minEur));
+    setStartingPrice(String(Math.round(marketEstimate.avgEur * AED_PER_EUR)));
+    setReservePrice(String(Math.round(marketEstimate.minEur * AED_PER_EUR)));
   }, [marketEstimate, pricesTouched, readOnly]);
 
   // Photo state — record of slot key -> { local URI from camera (shown
@@ -434,8 +437,9 @@ export function InspectionWizardScreen({
         setMileage(String(v.mileage_km ?? ""));
         setColor(v.exterior_color ?? "");
         setCity(v.location_city ?? "Dubai");
-        setStartingPrice(v.listed_price_eur != null ? String(v.listed_price_eur) : "");
-        setReservePrice(v.reserve_price_eur != null ? String(v.reserve_price_eur) : "");
+        const vAed = v as VehicleRow & { price_aed?: number | null; reserve_price_aed?: number | null };
+        setStartingPrice(vAed.price_aed != null ? String(vAed.price_aed) : v.listed_price_eur != null ? String(Math.round(v.listed_price_eur * AED_PER_EUR)) : "");
+        setReservePrice(vAed.reserve_price_aed != null ? String(vAed.reserve_price_aed) : v.reserve_price_eur != null ? String(Math.round(v.reserve_price_eur * AED_PER_EUR)) : "");
         setNotes(v.inspection_notes ?? "");
         setBodyType(v.body_type ?? "");
         setEngine(v.engine ?? "");
@@ -909,8 +913,9 @@ export function InspectionWizardScreen({
         seller_phone: sellerPhone || vehicle.seller_phone || "+971-",
         inspector_id: user.id,
         inspection_date: new Date().toISOString(),
-        listed_price_eur: Number(startingPrice) || 0,
-        reserve_price_eur: reservePrice ? Number(reservePrice) : null,
+        // AED is the source of truth; the DB trigger derives the *_eur columns.
+        price_aed: Number(startingPrice) || 0,
+        reserve_price_aed: reservePrice ? Number(reservePrice) : null,
         inspection_notes: notes.trim() || null,
       };
 
@@ -1250,9 +1255,9 @@ export function InspectionWizardScreen({
                   <Text style={styles.estTitle}>{t("details.marketEstimate")}</Text>
                 </View>
                 <View style={styles.estCols}>
-                  <EstCol label={t("details.min")} value={marketEstimate.minEur} />
-                  <EstCol label={t("details.avg")} value={marketEstimate.avgEur} highlight />
-                  <EstCol label={t("details.max")} value={marketEstimate.maxEur} />
+                  <EstCol label={t("details.min")} value={Math.round(marketEstimate.minEur * AED_PER_EUR)} />
+                  <EstCol label={t("details.avg")} value={Math.round(marketEstimate.avgEur * AED_PER_EUR)} highlight />
+                  <EstCol label={t("details.max")} value={Math.round(marketEstimate.maxEur * AED_PER_EUR)} />
                 </View>
                 <Text style={styles.estNote}>
                   {marketEstimate.source === "market_data"
@@ -1269,18 +1274,18 @@ export function InspectionWizardScreen({
               <Text style={styles.priceHeaderText}>{t("details.pricing")}</Text>
             </View>
             <View style={{ flexDirection: "row", gap: 10 }}>
-              <Field label={t("details.startingPrice")} required style={{ flex: 1 }}>
+              <Field label={`${t("details.startingPrice")} (AED)`} required style={{ flex: 1 }}>
                 <TextInput
                   value={startingPrice}
                   onChangeText={(v) => { setStartingPrice(v.replace(/[^0-9]/g, "")); setPricesTouched(true); }}
                   keyboardType="number-pad"
                   style={styles.input}
                   editable={!readOnly}
-                  placeholder="35000"
+                  placeholder="120000"
                   placeholderTextColor={theme.colors.textLight}
                 />
               </Field>
-              <Field label={t("details.reservePrice")} style={{ flex: 1 }}>
+              <Field label={`${t("details.reservePrice")} (AED)`} style={{ flex: 1 }}>
                 <TextInput
                   value={reservePrice}
                   onChangeText={(v) => { setReservePrice(v.replace(/[^0-9]/g, "")); setPricesTouched(true); }}
@@ -1663,12 +1668,12 @@ export function InspectionWizardScreen({
                 <View style={styles.reviewPriceRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.reviewPriceLabel}>{t("review.startingPrice")}</Text>
-                    <Text style={styles.reviewPriceValue}>€{Number(startingPrice).toLocaleString("en-GB")}</Text>
+                    <Text style={styles.reviewPriceValue}>AED {Number(startingPrice).toLocaleString("en-GB")}</Text>
                   </View>
                   {reservePrice && (
                     <View style={{ flex: 1 }}>
                       <Text style={styles.reviewPriceLabel}>{t("review.reserve")}</Text>
-                      <Text style={styles.reviewPriceValue}>€{Number(reservePrice).toLocaleString("en-GB")}</Text>
+                      <Text style={styles.reviewPriceValue}>AED {Number(reservePrice).toLocaleString("en-GB")}</Text>
                     </View>
                   )}
                 </View>
@@ -1818,7 +1823,7 @@ function EstCol({ label, value, highlight }: { label: string; value: number; hig
     <View style={styles.estCol}>
       <Text style={styles.estColLabel}>{label}</Text>
       <Text style={[styles.estColValue, highlight && { color: theme.colors.brand }]}>
-        €{value.toLocaleString("en-GB")}
+        AED {value.toLocaleString("en-GB")}
       </Text>
     </View>
   );
