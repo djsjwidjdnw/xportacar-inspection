@@ -227,6 +227,30 @@ const PHOTO_SLOT_BY_KEY: Record<string, { label: string; category: string }> =
 
 const MAX_OTHER_PHOTOS = 10;
 
+// Body type — a searchable single-select mirroring the Market Spec field.
+// `value` is the canonical English string stored on vehicles.body_type
+// (read by the web/admin/buyer apps); `tkey` is the translated on-screen label.
+const BODY_TYPES: ReadonlyArray<{ value: string; tkey: string }> = [
+  { value: "Sedan",       tkey: "bodyType.sedan" },
+  { value: "Coupe",       tkey: "bodyType.coupe" },
+  { value: "SUV",         tkey: "bodyType.suv" },
+  { value: "Convertible", tkey: "bodyType.convertible" },
+  { value: "Wagon",       tkey: "bodyType.wagon" },
+  { value: "Hatchback",   tkey: "bodyType.hatchback" },
+  { value: "Crossover",   tkey: "bodyType.crossover" },
+  { value: "Pickup",      tkey: "bodyType.pickup" },
+  { value: "Van",         tkey: "bodyType.van" },
+  { value: "Truck",       tkey: "bodyType.truck" },
+] as const;
+
+// True when `v` matches a known body-type value (case-insensitive). A decoded
+// VIN or a saved DB value not in the list opens the field in free-text mode.
+function isKnownBodyType(v: string | null | undefined): boolean {
+  if (!v) return false;
+  const lower = v.trim().toLowerCase();
+  return BODY_TYPES.some((b) => b.value.toLowerCase() === lower);
+}
+
 // Vehicle attribute enums surfaced as inline pill selectors (auto-fillable
 // from the VIN decoder, overridable by the inspector). Values are the DB enums.
 const FUEL_TYPES: FuelType[] = ["petrol", "diesel", "hybrid", "electric"];
@@ -331,6 +355,7 @@ export function InspectionWizardScreen({
   const [makePickerOpen, setMakePickerOpen] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [marketPickerOpen, setMarketPickerOpen] = useState(false);
+  const [bodyTypePickerOpen, setBodyTypePickerOpen] = useState(false);
 
   // VIN decoder state. `decoded` drives the "Decoded" badges; `manuallyEdited`
   // (a ref so it doesn't retrigger the decode effect) protects inspector edits
@@ -419,6 +444,7 @@ export function InspectionWizardScreen({
         if (v.fuel_type === "petrol" || v.fuel_type === "diesel" || v.fuel_type === "hybrid" || v.fuel_type === "electric") setFuelType(v.fuel_type);
         setMarketSpec(v.market_spec ?? "");
         setMarketOther(!!v.market_spec && !MARKET_SPECS.some((m) => m.value === v.market_spec));
+        setBodyTypeOther(!!v.body_type && !isKnownBodyType(v.body_type));
         // Unknown make/model load straight into free-text mode.
         setMakeOther(!!v.make && !isKnownMake(v.make));
         setModelOther(!!v.model && !isKnownModel(v.make ?? "", v.model));
@@ -466,6 +492,7 @@ export function InspectionWizardScreen({
         if (data.fuelType === "petrol" || data.fuelType === "diesel" || data.fuelType === "hybrid" || data.fuelType === "electric") setFuelType(data.fuelType);
         setMarketSpec(data.marketSpec ?? "");
         setMarketOther(!!data.marketSpec && !MARKET_SPECS.some((m) => m.value === data.marketSpec));
+        setBodyTypeOther(!!data.bodyType && !isKnownBodyType(data.bodyType));
         setMakeOther(!!data.make && !isKnownMake(data.make));
         setModelOther(!!data.model && !isKnownModel(data.make, data.model));
         // Don't re-decode a VIN we already auto-saved past.
@@ -513,6 +540,8 @@ export function InspectionWizardScreen({
 
   // Market spec "Other" → free-text mode (set explicitly on load / restore).
   const [marketOther, setMarketOther] = useState(false);
+  // Body type "Other" → free-text mode (set explicitly on load / restore).
+  const [bodyTypeOther, setBodyTypeOther] = useState(false);
 
   // ---- VIN decoder (auto.dev) ---------------------------------------
   // Mark a field as manually edited so a later VIN decode won't clobber it,
@@ -543,7 +572,7 @@ export function InspectionWizardScreen({
       next.model = true;
     }
     if (d.year && !edited.has("year")) { setYear(d.year); next.year = true; }
-    if (d.bodyType && !edited.has("bodyType")) { setBodyType(d.bodyType); next.bodyType = true; }
+    if (d.bodyType && !edited.has("bodyType")) { setBodyType(d.bodyType); setBodyTypeOther(!isKnownBodyType(d.bodyType)); next.bodyType = true; }
     if (d.engine && !edited.has("engine")) { setEngine(d.engine); next.engine = true; }
     if (d.drivetrain && !edited.has("drivetrain")) { setDrivetrain(d.drivetrain); next.drivetrain = true; }
     if (d.transmission && !edited.has("transmission")) { setTransmission(d.transmission); next.transmission = true; }
@@ -619,6 +648,20 @@ export function InspectionWizardScreen({
     setModel("");
   }, [markEdited]);
 
+  const onSelectBodyType = useCallback((value: string) => {
+    markEdited("bodyType");
+    setBodyTypePickerOpen(false);
+    setBodyTypeOther(false);
+    setBodyType(value);
+  }, [markEdited]);
+
+  const onBodyTypeOther = useCallback(() => {
+    markEdited("bodyType");
+    setBodyTypePickerOpen(false);
+    setBodyTypeOther(true);
+    setBodyType("");
+  }, [markEdited]);
+
   // Option lists for the searchable pickers.
   const makeOptions = useMemo<SelectOption[]>(
     () => ALL_MAKES.map((m, i) => ({
@@ -637,12 +680,20 @@ export function InspectionWizardScreen({
     () => MARKET_SPECS.map((m) => ({ value: m.value, label: t(m.tkey) })),
     [t],
   );
+  const bodyTypeOptions = useMemo<SelectOption[]>(
+    () => BODY_TYPES.map((b) => ({ value: b.value, label: t(b.tkey) })),
+    [t],
+  );
   // Display helpers for the select boxes (canonical value → friendly label).
   const makeDisplay = useMemo(() => (make ? (ALL_MAKES.find((m) => m.value === make)?.label ?? make) : ""), [make]);
   const marketDisplay = useMemo(() => {
     const found = MARKET_SPECS.find((m) => m.value === marketSpec);
     return found ? t(found.tkey) : marketSpec;
   }, [marketSpec, t]);
+  const bodyTypeDisplay = useMemo(() => {
+    const found = BODY_TYPES.find((b) => b.value === bodyType);
+    return found ? t(found.tkey) : bodyType;
+  }, [bodyType, t]);
 
   // ---- Helpers ------------------------------------------------------
 
@@ -820,6 +871,14 @@ export function InspectionWizardScreen({
       setStep(1);
       return;
     }
+    // All photo slots are mandatory. Count the captured local URIs (same signal
+    // the per-section progress uses) so a still-uploading photo still counts.
+    const remaining = Math.max(0, TOTAL_PHOTO_SLOTS - Object.keys(photos).length);
+    if (remaining > 0) {
+      notify(t("photos.allRequired", { total: TOTAL_PHOTO_SLOTS, n: remaining }));
+      setStep(2);
+      return;
+    }
     setSubmitting(true);
     try {
       let vehicleId = vehicle.id;
@@ -992,7 +1051,13 @@ export function InspectionWizardScreen({
   if (loading) return <Spinner label={t("wiz.loadingVehicle")} />;
 
   const currentStep = STEPS.find((s) => s.n === step)!;
-  const photoProgress = Object.keys(photos).length / TOTAL_PHOTO_SLOTS;
+  // Every one of the TOTAL_PHOTO_SLOTS slots is mandatory before submit. A slot
+  // counts as captured the moment its local URI lands (upload may still be in
+  // flight) — same signal the per-section progress uses.
+  const photosCaptured  = Object.keys(photos).length;
+  const photosRemaining = Math.max(0, TOTAL_PHOTO_SLOTS - photosCaptured);
+  const allPhotosCaptured = photosRemaining === 0;
+  const photoProgress = photosCaptured / TOTAL_PHOTO_SLOTS;
   const docProgress   = Object.keys(docs).length / DOC_SLOTS.length;
   const damagedPanelsWithoutPhoto = Object.entries(damages)
     .filter(([, d]) => d.level !== "none" && !d.photoUrl).length;
@@ -1044,7 +1109,7 @@ export function InspectionWizardScreen({
                 setStartingPrice(""); setReservePrice(""); setNotes("");
                 setBodyType(""); setEngine(""); setDrivetrain("");
                 setTransmission(""); setFuelType(""); setMarketSpec("");
-                setMakeOther(false); setModelOther(false); setMarketOther(false);
+                setMakeOther(false); setModelOther(false); setMarketOther(false); setBodyTypeOther(false);
                 setDecoded({}); manuallyEditedRef.current = new Set(); lastDecodedVinRef.current = "";
                 setStep(1); setRestoredAt(null);
               }}
@@ -1137,7 +1202,16 @@ export function InspectionWizardScreen({
             </View>
 
             <View style={{ flexDirection: "row", gap: 10 }}>
-              <Field label={t("details.bodyType")} style={{ flex: 1 }} badge={decoded.bodyType ? <DecodedBadge t={t} /> : null}><TextInput value={bodyType} onChangeText={(v) => { markEdited("bodyType"); setBodyType(v); }} style={styles.input} editable={!readOnly} placeholder={t("details.bodyTypeExample")} placeholderTextColor={theme.colors.textLight} /></Field>
+              <Field label={t("details.bodyType")} style={{ flex: 1 }} badge={decoded.bodyType ? <DecodedBadge t={t} /> : null}>
+                {bodyTypeOther ? (
+                  <View>
+                    <TextInput value={bodyType} onChangeText={(v) => { markEdited("bodyType"); setBodyType(v); }} style={styles.input} editable={!readOnly} placeholder={t("bodyType.otherPlaceholder")} placeholderTextColor={theme.colors.textLight} />
+                    {!readOnly && <Pressable onPress={() => { setBodyTypeOther(false); setBodyType(""); setBodyTypePickerOpen(true); }} hitSlop={6}><Text style={styles.pickFromList}>{t("details.pickFromList")}</Text></Pressable>}
+                  </View>
+                ) : (
+                  <SelectField value={bodyTypeDisplay} placeholder={t("bodyType.select")} onPress={() => setBodyTypePickerOpen(true)} disabled={readOnly} />
+                )}
+              </Field>
               <Field label={t("details.engine")} style={{ flex: 1 }} badge={decoded.engine ? <DecodedBadge t={t} /> : null}><TextInput value={engine} onChangeText={(v) => { markEdited("engine"); setEngine(v); }} style={styles.input} editable={!readOnly} placeholder={t("details.engineExample")} placeholderTextColor={theme.colors.textLight} /></Field>
             </View>
 
@@ -1259,12 +1333,32 @@ export function InspectionWizardScreen({
               onSelectOther={() => { setMarketPickerOpen(false); setMarketOther(true); setMarketSpec(""); }}
               onClose={() => setMarketPickerOpen(false)}
             />
+            <SearchableSelect
+              visible={bodyTypePickerOpen}
+              title={t("bodyType.title")}
+              options={bodyTypeOptions}
+              searchPlaceholder={t("common.search")}
+              emptyLabel={t("common.noResults")}
+              otherLabel={t("bodyType.other")}
+              selected={bodyType}
+              onSelect={onSelectBodyType}
+              onSelectOther={onBodyTypeOther}
+              onClose={() => setBodyTypePickerOpen(false)}
+            />
           </Card>
         )}
 
         {step === 2 && (
           <View>
-            <ProgressBar value={photoProgress} label={t("photos.progress", { done: Object.keys(photos).length, total: TOTAL_PHOTO_SLOTS })} />
+            <ProgressBar value={photoProgress} label={t("photos.progress", { done: photosCaptured, total: TOTAL_PHOTO_SLOTS })} />
+            {!allPhotosCaptured && (
+              <View style={[styles.warnBanner, { marginBottom: 12 }]}>
+                <Icon name="camera-outline" size={16} color={theme.colors.warning} />
+                <Text style={styles.warnText}>
+                  {t("photos.allRequired", { total: TOTAL_PHOTO_SLOTS, n: photosRemaining })}
+                </Text>
+              </View>
+            )}
             <Text style={styles.tip}>{t("photos.tip")}</Text>
 
             {PHOTO_SECTIONS.map((sec) => {
@@ -1582,7 +1676,7 @@ export function InspectionWizardScreen({
             </Card>
 
             <View style={styles.summaryRow}>
-              <SummaryCard icon="camera-outline"      value={`${Object.keys(photos).length}/${TOTAL_PHOTO_SLOTS}`} label={t("review.photos")}  complete={Object.keys(photos).length === TOTAL_PHOTO_SLOTS} />
+              <SummaryCard icon="camera-outline"      value={`${photosCaptured}/${TOTAL_PHOTO_SLOTS}`} label={t("review.photos")}  complete={allPhotosCaptured} />
               <SummaryCard icon="images-outline"      value={String(otherPhotos.length)}                            label={t("review.other")} />
               <SummaryCard icon="warning-outline"     value={String(Object.values(damages).filter((d) => d.level !== "none").length)} label={t("review.damages")} />
               <SummaryCard icon="folder-open-outline" value={`${Object.keys(docs).length}/${DOC_SLOTS.length}`}     label={t("review.docs")}    complete={Object.keys(docs).length === DOC_SLOTS.length} />
@@ -1620,17 +1714,39 @@ export function InspectionWizardScreen({
               )}
             </View>
 
+            {!readOnly && !allPhotosCaptured && (
+              <View style={[styles.warnBanner, { marginTop: 16, marginBottom: 0 }]}>
+                <Icon name="camera-outline" size={16} color={theme.colors.warning} />
+                <Text style={styles.warnText}>
+                  {t("photos.allRequired", { total: TOTAL_PHOTO_SLOTS, n: photosRemaining })}
+                </Text>
+              </View>
+            )}
+
             {!readOnly && (
-              <Pressable onPress={submit} disabled={submitting} style={({ pressed }) => [styles.submitShadow, pressed && { opacity: 0.92 }]}>
+              // All photo slots are mandatory. While any are missing the button
+              // is greyed out; tapping it still fires submit(), which surfaces
+              // the "{n} remaining" alert and jumps back to the photos step.
+              <Pressable
+                onPress={submit}
+                disabled={submitting}
+                style={({ pressed }) => [styles.submitShadow, !allPhotosCaptured && styles.submitShadowDisabled, pressed && { opacity: 0.92 }]}
+              >
                 <LinearGradient
-                  colors={[theme.colors.brand, theme.colors.brandDark]}
+                  colors={allPhotosCaptured ? [theme.colors.brand, theme.colors.brandDark] : [theme.colors.textLight, theme.colors.textMuted]}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                   style={styles.submitBtn}
                 >
                   {submitting && <ActivityIndicator color={theme.colors.white} />}
                   <Icon name="checkmark-done-outline" size={20} color={theme.colors.white} />
-                  <Text style={styles.submitText}>{submitting ? t("review.submitting") : t("review.submit")}</Text>
+                  <Text style={styles.submitText}>
+                    {submitting
+                      ? t("review.submitting")
+                      : allPhotosCaptured
+                        ? t("review.submit")
+                        : t("photos.allRequired", { total: TOTAL_PHOTO_SLOTS, n: photosRemaining })}
+                  </Text>
                 </LinearGradient>
               </Pressable>
             )}
@@ -2049,6 +2165,7 @@ const styles = StyleSheet.create({
   summaryNum: { fontSize: 18, fontWeight: "800", color: theme.colors.text, marginTop: 4 },
   summaryLabel: { fontSize: 10, color: theme.colors.textLight, marginTop: 2, textTransform: "uppercase", fontWeight: "700", letterSpacing: 0.4 },
   submitShadow: { marginTop: 20, borderRadius: theme.radius.lg, shadowColor: theme.colors.brand, shadowOpacity: 0.3, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
+  submitShadowDisabled: { shadowOpacity: 0, elevation: 0, opacity: 0.85 },
   submitBtn: { height: 54, borderRadius: theme.radius.lg, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 10 },
   submitText: { color: theme.colors.white, fontSize: 16, fontWeight: "800" },
 

@@ -343,6 +343,25 @@ const en: Dict = {
   "market.chinese":            "Chinese Specs",
   "market.mexican":            "Mexican Specs",
 
+  // Body type
+  "bodyType.title":            "Body type",
+  "bodyType.select":           "Select body type",
+  "bodyType.other":            "Other (type it in)",
+  "bodyType.otherPlaceholder": "Enter body type",
+  "bodyType.sedan":            "Sedan",
+  "bodyType.coupe":            "Coupe",
+  "bodyType.suv":              "SUV",
+  "bodyType.convertible":      "Convertible",
+  "bodyType.wagon":            "Wagon",
+  "bodyType.hatchback":        "Hatchback",
+  "bodyType.crossover":        "Crossover",
+  "bodyType.pickup":           "Pickup",
+  "bodyType.van":              "Van",
+  "bodyType.truck":            "Truck",
+
+  // All photos required
+  "photos.allRequired":        "All {total} photos are required. {n} remaining.",
+
   // Photo sections + expanded slots
   "photos.section.exterior":      "Exterior",
   "photos.section.interior":      "Interior",
@@ -670,6 +689,23 @@ const de: Dict = {
   "market.chinese":            "Chinesische Version",
   "market.mexican":            "Mexikanische Version",
 
+  "bodyType.title":            "Karosserie",
+  "bodyType.select":           "Karosserie wählen",
+  "bodyType.other":            "Andere (eintippen)",
+  "bodyType.otherPlaceholder": "Karosserie eingeben",
+  "bodyType.sedan":            "Limousine",
+  "bodyType.coupe":            "Coupé",
+  "bodyType.suv":              "SUV",
+  "bodyType.convertible":      "Cabrio",
+  "bodyType.wagon":            "Kombi",
+  "bodyType.hatchback":        "Schrägheck",
+  "bodyType.crossover":        "Crossover",
+  "bodyType.pickup":           "Pick-up",
+  "bodyType.van":              "Van",
+  "bodyType.truck":            "Lkw",
+
+  "photos.allRequired":        "Alle {total} Fotos sind erforderlich. Noch {n} ausstehend.",
+
   "photos.section.exterior":      "Außen",
   "photos.section.interior":      "Innen",
   "photos.section.engine":        "Motor",
@@ -996,6 +1032,23 @@ const fr: Dict = {
   "market.chinese":            "Spéc. chinoise",
   "market.mexican":            "Spéc. mexicaine",
 
+  "bodyType.title":            "Carrosserie",
+  "bodyType.select":           "Choisir la carrosserie",
+  "bodyType.other":            "Autre (à saisir)",
+  "bodyType.otherPlaceholder": "Saisir la carrosserie",
+  "bodyType.sedan":            "Berline",
+  "bodyType.coupe":            "Coupé",
+  "bodyType.suv":              "SUV",
+  "bodyType.convertible":      "Cabriolet",
+  "bodyType.wagon":            "Break",
+  "bodyType.hatchback":        "Hayon",
+  "bodyType.crossover":        "Crossover",
+  "bodyType.pickup":           "Pick-up",
+  "bodyType.van":              "Fourgon",
+  "bodyType.truck":            "Camion",
+
+  "photos.allRequired":        "Les {total} photos sont toutes requises. {n} restante(s).",
+
   "photos.section.exterior":      "Extérieur",
   "photos.section.interior":      "Intérieur",
   "photos.section.engine":        "Moteur",
@@ -1321,6 +1374,23 @@ const ar: Dict = {
   "market.uk":                 "مواصفات بريطانية (RHD)",
   "market.chinese":            "مواصفات صينية",
   "market.mexican":            "مواصفات مكسيكية",
+
+  "bodyType.title":            "نوع الهيكل",
+  "bodyType.select":           "اختر نوع الهيكل",
+  "bodyType.other":            "أخرى (اكتبها)",
+  "bodyType.otherPlaceholder": "اكتب نوع الهيكل",
+  "bodyType.sedan":            "سيدان",
+  "bodyType.coupe":            "كوبيه",
+  "bodyType.suv":              "دفع رباعي",
+  "bodyType.convertible":      "مكشوفة",
+  "bodyType.wagon":            "ستيشن",
+  "bodyType.hatchback":        "هاتشباك",
+  "bodyType.crossover":        "كروس أوفر",
+  "bodyType.pickup":           "بيك أب",
+  "bodyType.van":              "فان",
+  "bodyType.truck":            "شاحنة",
+
+  "photos.allRequired":        "جميع الصور الـ {total} مطلوبة. المتبقي {n}.",
 
   "photos.section.exterior":      "الخارج",
   "photos.section.interior":      "الداخل",
