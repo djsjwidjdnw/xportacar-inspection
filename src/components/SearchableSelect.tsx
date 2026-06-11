@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  FlatList, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View,
+  FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { Icon } from "./Icon";
 import { theme } from "../lib/theme";
@@ -60,7 +60,10 @@ export function SearchableSelect({
 
   return (
     <Modal transparent animationType="slide" onRequestClose={onClose} visible>
-      <View style={styles.scrim}>
+      <KeyboardAvoidingView
+        style={styles.scrim}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
         <View style={styles.sheet}>
           <View style={styles.header}>
             <Text style={styles.title} numberOfLines={1}>{title}</Text>
@@ -127,7 +130,7 @@ export function SearchableSelect({
             }
           />
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

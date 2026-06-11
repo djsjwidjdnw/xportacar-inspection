@@ -340,7 +340,7 @@ export function InspectionWizardScreen({
   const manuallyEditedRef = useRef<Set<string>>(new Set());
   const decodeCacheRef = useRef<Map<string, DecodedVin | null>>(new Map());
   const lastDecodedVinRef = useRef<string>("");
-  const [vinStatus, setVinStatus] = useState<"idle" | "decoding" | "ok" | "fail">("idle");
+  const [vinStatus, setVinStatus] = useState<"idle" | "decoding" | "ok" | "fail" | "invalid">("idle");
 
   // Photo step — which sections are expanded (exterior open by default).
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({ exterior: true });
@@ -557,7 +557,14 @@ export function InspectionWizardScreen({
   useEffect(() => {
     if (readOnly) { setVinStatus("idle"); return; }
     const v = vin.trim().toUpperCase();
-    if (!isValidVin(v)) { setVinStatus("idle"); return; }
+    if (!isValidVin(v)) {
+      // Non-empty but not a complete/valid 17-char VIN. Nudge only once it's a
+      // near-complete entry (avoids nagging mid-typing). A 16-char / wrong-length
+      // VIN lands here — previously it sat silently "idle", which users mistook
+      // for a broken decoder.
+      setVinStatus(v.length >= 11 ? "invalid" : "idle");
+      return;
+    }
     if (v === lastDecodedVinRef.current) return;
 
     let on = true;
@@ -1084,6 +1091,13 @@ export function InspectionWizardScreen({
             >
               <TextInput value={vin} onChangeText={(v) => setVin(v.toUpperCase())} autoCapitalize="characters" maxLength={17} style={styles.input} editable={!readOnly} placeholder="WBA1234567890XXXX" placeholderTextColor={theme.colors.textLight} />
             </Field>
+            {vinStatus === "invalid" && !readOnly && (
+              <Text style={styles.vinFailText}>
+                {vin.trim().length < 17
+                  ? t("details.vinIncomplete", { count: vin.trim().length })
+                  : t("details.vinDecodeFail")}
+              </Text>
+            )}
             {vinStatus === "fail" && !readOnly && (
               <Text style={styles.vinFailText}>{t("details.vinDecodeFail")}</Text>
             )}
