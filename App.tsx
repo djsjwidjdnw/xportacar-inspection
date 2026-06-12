@@ -1,8 +1,6 @@
-import { useEffect } from "react";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import * as Updates from "expo-updates";
 
 import { AuthProvider } from "./src/lib/auth";
 import { I18nProvider } from "./src/lib/i18n";
@@ -16,27 +14,6 @@ import { ErrorBoundary } from "./src/components/ErrorBoundary";
 // Expo Go process left it stuck (e.g. the buyer app running locale=ar).
 
 export default function App() {
-  // Apply a pending OTA update on launch. app.json sets
-  // updates.fallbackToCacheTimeout=0, so a downloaded update otherwise only
-  // takes effect on the NEXT cold launch — meaning a freshly-published OTA
-  // (e.g. the bottom-tab nav) appears one relaunch late. Checking + reloading
-  // here surfaces it within this session. Best-effort and guarded: skipped in
-  // dev / Expo Go, only reloads when a newer update actually exists (so no
-  // loop — after applying, the running bundle is current), and any failure is
-  // swallowed so startup never blocks on the network.
-  useEffect(() => {
-    (async () => {
-      try {
-        if (__DEV__ || !Updates.isEnabled) return;
-        const res = await Updates.checkForUpdateAsync();
-        if (res.isAvailable) {
-          await Updates.fetchUpdateAsync();
-          await Updates.reloadAsync();
-        }
-      } catch { /* run on the embedded/cached bundle */ }
-    })();
-  }, []);
-
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
