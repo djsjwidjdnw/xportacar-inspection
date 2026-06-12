@@ -14,7 +14,7 @@ export type IconName =
   | "log-out-outline" | "mail-outline" | "pricetag-outline" | "trash-outline"
   | "warning-outline" | "eye-off-outline" | "folder-open-outline" | "cloud-upload-outline"
   | "globe-outline" | "search-outline" | "close-circle" | "chevron-down" | "chevron-up"
-  | "color-palette-outline" | "images-outline";
+  | "color-palette-outline" | "images-outline" | "key-outline";
 
 export function Icon({
   name,
@@ -91,6 +91,8 @@ export function Icon({
       return <Svg {...p}><Path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" /><Polyline points="16 16 12 12 8 16" /><Line x1="12" y1="12" x2="12" y2="21" /></Svg>;
     case "globe-outline":
       return <Svg {...p}><Circle cx="12" cy="12" r="10" /><Line x1="2" y1="12" x2="22" y2="12" /><Path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></Svg>;
+    case "key-outline":
+      return <Svg {...p}><Circle cx="7.5" cy="15.5" r="4.5" /><Path d="M10.7 12.3 19 4" /><Path d="M16 7l3 3" /><Path d="M14 9l3 3" /></Svg>;
     default:
       // Unknown name — render a neutral dot so layout never breaks.
       return <Svg {...p}><Circle cx="12" cy="12" r="9" /></Svg>;

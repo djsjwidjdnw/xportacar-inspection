@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
-  Alert, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform,
+  Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Icon } from "../components/Icon";
@@ -8,6 +9,7 @@ import { Icon } from "../components/Icon";
 import { supabase } from "../lib/supabase";
 import { theme } from "../lib/theme";
 import { registerForPush } from "../lib/push";
+import { notify } from "../lib/ui";
 import { useTranslation } from "../lib/i18n";
 
 export function LoginScreen({ navigation }: { navigation: { navigate: (s: string) => void } }) {
@@ -16,6 +18,12 @@ export function LoginScreen({ navigation }: { navigation: { navigate: (s: string
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPw, setShowPw] = useState(false);
+
+  // Forgot-password modal. Supabase emails a reset link that opens the web
+  // reset page; the inspector sets a new password there and comes back to sign in.
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetSending, setResetSending] = useState(false);
 
   const signIn = async () => {
     if (!email || !password) return Alert.alert(t("auth.missingInfo"), t("auth.missingBody"));
@@ -29,6 +37,27 @@ export function LoginScreen({ navigation }: { navigation: { navigate: (s: string
     // Push is best-effort — Expo Go SDK 53+ removed push token support so
     // wrap defensively so a sync throw can't take the app down.
     try { void registerForPush().catch(() => {}); } catch { /* silent */ }
+  };
+
+  const openReset = () => {
+    setResetEmail(email.trim());
+    setResetOpen(true);
+  };
+
+  const sendReset = async () => {
+    const addr = resetEmail.trim();
+    if (!addr) { notify(t("pw.resetTitle"), t("pw.emailRequired")); return; }
+    setResetSending(true);
+    try {
+      await supabase.auth.resetPasswordForEmail(addr, {
+        redirectTo: "https://xportacar.com/reset-password/callback",
+      });
+      // Always report success (don't leak whether an account exists).
+      setResetOpen(false);
+      notify(t("pw.resetTitle"), t("pw.sent"));
+    } finally {
+      setResetSending(false);
+    }
   };
 
   return (
@@ -76,6 +105,9 @@ export function LoginScreen({ navigation }: { navigation: { navigate: (s: string
               <Icon name={showPw ? "eye-off-outline" : "eye-outline"} size={18} color={theme.colors.textLight} />
             </Pressable>
           </View>
+          <Pressable onPress={openReset} hitSlop={8} style={styles.forgotLink}>
+            <Text style={styles.forgotText}>{t("pw.forgot")}</Text>
+          </Pressable>
         </View>
 
         <Pressable onPress={signIn} disabled={loading} style={({ pressed }) => [styles.btnShadow, pressed && { opacity: 0.92 }]}>
@@ -96,6 +128,66 @@ export function LoginScreen({ navigation }: { navigation: { navigate: (s: string
           <Text style={styles.signUpText}>{t("auth.signUpLink")}</Text>
         </Pressable>
       </ScrollView>
+
+      {/* Forgot-password modal */}
+      <Modal
+        visible={resetOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!resetSending) setResetOpen(false); }}
+      >
+        <KeyboardAvoidingView
+          style={styles.mBackdrop}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <View style={styles.mSheet}>
+            <View style={styles.mHeader}>
+              <View style={styles.mIconWrap}>
+                <Icon name="key-outline" size={20} color={theme.colors.brand} />
+              </View>
+              <Text style={styles.mTitle}>{t("pw.resetTitle")}</Text>
+              <Pressable onPress={() => { if (!resetSending) setResetOpen(false); }} hitSlop={10} disabled={resetSending}>
+                <Icon name="close" size={22} color={theme.colors.textMuted} />
+              </Pressable>
+            </View>
+
+            <Text style={styles.mBody}>{t("pw.resetBody")}</Text>
+
+            <Text style={styles.mLabel}>{t("auth.email")}</Text>
+            <View style={styles.inputWrap}>
+              <Icon name="mail-outline" size={16} color={theme.colors.textLight} style={styles.inputIcon} />
+              <TextInput
+                value={resetEmail}
+                onChangeText={setResetEmail}
+                autoCapitalize="none"
+                autoComplete="email"
+                keyboardType="email-address"
+                editable={!resetSending}
+                placeholderTextColor={theme.colors.textLight}
+                style={styles.input}
+                placeholder="inspector@xportacar.com"
+              />
+            </View>
+
+            <Pressable
+              onPress={sendReset}
+              disabled={resetSending}
+              style={({ pressed }) => [styles.mPrimaryBtn, resetSending && { opacity: 0.6 }, pressed && { opacity: 0.9 }]}
+            >
+              {resetSending && <ActivityIndicator size="small" color={theme.colors.white} />}
+              <Text style={styles.mPrimaryText}>{t("pw.sendLink")}</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => { if (!resetSending) setResetOpen(false); }}
+              disabled={resetSending}
+              style={({ pressed }) => [styles.mCancelBtn, pressed && { opacity: 0.7 }]}
+            >
+              <Text style={styles.mCancelText}>{t("pw.cancel")}</Text>
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -135,4 +227,24 @@ const styles = StyleSheet.create({
   foot:      { fontSize: 12, color: theme.colors.textLight, textAlign: "center", marginTop: 24 },
   signUpLink: { alignSelf: "center", marginTop: 12, paddingVertical: 4 },
   signUpText: { fontSize: 14, fontWeight: "800", color: theme.colors.brand, textAlign: "center" },
+
+  // Forgot-password link (under the password field)
+  forgotLink: { alignSelf: "flex-end", marginTop: 8, paddingVertical: 2 },
+  forgotText: { fontSize: 12, fontWeight: "800", color: theme.colors.brand },
+
+  // Forgot-password modal
+  mBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 },
+  mSheet: { backgroundColor: theme.colors.white, borderRadius: 20, padding: 20, gap: 12 },
+  mHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
+  mIconWrap: { width: 40, height: 40, borderRadius: 20, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center" },
+  mTitle: { flex: 1, fontSize: 17, fontWeight: "800", color: theme.colors.text },
+  mBody: { fontSize: 13, color: theme.colors.textMuted, lineHeight: 19 },
+  mLabel: { fontSize: 11, fontWeight: "800", color: theme.colors.textMuted, textTransform: "uppercase", letterSpacing: 0.5 },
+  mPrimaryBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    height: 48, borderRadius: theme.radius.lg, backgroundColor: theme.colors.brand, marginTop: 4,
+  },
+  mPrimaryText: { color: theme.colors.white, fontWeight: "800", fontSize: 15 },
+  mCancelBtn: { height: 44, alignItems: "center", justifyContent: "center" },
+  mCancelText: { color: theme.colors.textMuted, fontWeight: "800", fontSize: 14 },
 });
