@@ -132,11 +132,55 @@ export async function decodeVin(vin: string): Promise<VinDecodeResult> {
     trim,
   };
 
+  // auto.dev coverage is thin for exotic/low-volume cars — it often returns only
+  // year+make. When key fields are missing, enrich from NHTSA vPIC directly
+  // (free, no API key, broad global coverage). Best-effort + OTA-safe (no new
+  // deps). The proxy now does this server-side too; this client fallback means
+  // the improvement also works via an OTA before the Edge Function is redeployed.
+  if (!data.model || !data.transmission || !data.drivetrain || !data.fuelType || !data.bodyType) {
+    const n = await fetchNhtsa(v);
+    if (n) {
+      if (!data.make && n.Make) data.make = canonicalizeMake(n.Make);
+      if (!data.model && n.Model) data.model = n.Model;
+      if (!data.trim && (n.Trim || n.Series)) data.trim = n.Trim || n.Series;
+      if (!data.year && n.ModelYear) data.year = String(parseInt(n.ModelYear, 10) || n.ModelYear);
+      if (!data.bodyType && n.BodyClass) data.bodyType = n.BodyClass;
+      if (!data.drivetrain && n.DriveType) data.drivetrain = n.DriveType;
+      if (!data.transmission) { const tr = normTransmission(n.TransmissionStyle); if (tr) data.transmission = tr; }
+      if (!data.fuelType) { const fl = normFuel(n.FuelTypePrimary); if (fl) data.fuelType = fl; }
+      if (!data.engine) { const eng = buildEngine({ DisplacementL: n.DisplacementL, EngineCylinders: n.EngineCylinders }); if (eng) data.engine = eng; }
+    }
+  }
+
   // If literally nothing usable came back, treat as not found.
   const hasAny = Object.values(data).some((x) => x != null && x !== "");
   if (!hasAny) return { ok: false, error: "not_found" };
 
   return { ok: true, data };
+}
+
+// NHTSA vPIC flat decode (free, no key). Returns the Results[0] object or null.
+interface NhtsaValues {
+  Make?: string; Model?: string; Series?: string; Trim?: string;
+  TransmissionStyle?: string; DriveType?: string; FuelTypePrimary?: string;
+  BodyClass?: string; DisplacementL?: string; EngineCylinders?: string; ModelYear?: string;
+}
+async function fetchNhtsa(vin: string): Promise<NhtsaValues | null> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 7000);
+    const r = await fetch(
+      `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${encodeURIComponent(vin)}?format=json`,
+      { headers: { Accept: "application/json" }, signal: ctrl.signal },
+    );
+    clearTimeout(timer);
+    if (!r.ok) return null;
+    // deno-lint-ignore no-explicit-any
+    const data: any = await r.json();
+    return (data?.Results?.[0] as NhtsaValues) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // Build an engine string from granular fields if no combined string exists.
