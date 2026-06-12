@@ -16,6 +16,7 @@ import { supabase } from "../lib/supabase";
 import { theme, formatKm } from "../lib/theme";
 import { confirmAsync } from "../lib/ui";
 import { estimateValuation, getMarketValuation, type Valuation } from "../lib/valuation";
+import { catalogTrims } from "../lib/trimCatalog";
 import { useAuth } from "../lib/auth";
 import { useTranslation, panelLabelKey } from "../lib/i18n";
 import type { VehicleRow } from "../lib/types";
@@ -409,25 +410,69 @@ export function InspectionWizardScreen({
   const [pricesTouched, setPricesTouched] = useState<boolean>(!!incomingId);
   const referenceEstimate = useMemo<Valuation | null>(() => {
     if (!make.trim() || !model.trim() || !year.trim()) return null;
-    return estimateValuation({ make, model, year: Number(year), mileageKm: Number(mileage) || undefined });
-  }, [make, model, year, mileage]);
+    return estimateValuation({ make, model, trim: trim.trim() || undefined, year: Number(year), mileageKm: Number(mileage) || undefined });
+  }, [make, model, trim, year, mileage]);
   const [liveValuation, setLiveValuation] = useState<Valuation | null>(null);
+  // Re-pull market value whenever make/model/year/mileage OR trim changes
+  // (debounced 600ms). Trim drives the figure: a base→SVJ swap re-fetches and
+  // re-prices. Trim filtering happens inside getMarketValuation/parseListings.
   useEffect(() => {
     setLiveValuation(null);
     if (!make.trim() || !model.trim() || !year.trim()) return;
     let on = true;
     const id = setTimeout(() => {
-      getMarketValuation({ make, model, year: Number(year), mileageKm: Number(mileage) || undefined })
+      getMarketValuation({ make, model, trim: trim.trim() || undefined, year: Number(year), mileageKm: Number(mileage) || undefined })
         .then((v) => { if (on && v.source === "market_data") setLiveValuation(v); });
     }, 600);
     return () => { on = false; clearTimeout(id); };
-  }, [make, model, year, mileage]);
+  }, [make, model, trim, year, mileage]);
   const marketEstimate = liveValuation ?? referenceEstimate;
   useEffect(() => {
     if (!marketEstimate || pricesTouched || readOnly) return;
     setStartingPrice(String(Math.round(marketEstimate.avgEur * AED_PER_EUR)));
     setReservePrice(String(Math.round(marketEstimate.minEur * AED_PER_EUR)));
   }, [marketEstimate, pricesTouched, readOnly]);
+
+  // Trim auto-suggest — distinct trims already listed for this make+model (real
+  // local data, shown first) merged with the static exotic/luxury catalog as a
+  // fallback for first-time models. User can tap a chip or keep typing.
+  const [trimSuggestions, setTrimSuggestions] = useState<string[]>([]);
+  useEffect(() => {
+    const mk = make.trim(), md = model.trim();
+    if (readOnly || !mk || !md) { setTrimSuggestions([]); return; }
+    let on = true;
+    const id = setTimeout(async () => {
+      let dbTrims: string[] = [];
+      try {
+        const { data } = await supabase
+          .from("vehicles")
+          .select("trim")
+          .ilike("make", mk)
+          .ilike("model", md)
+          .not("trim", "is", null)
+          .limit(200);
+        dbTrims = (data ?? []).map((r) => String((r as { trim?: unknown }).trim ?? "").trim()).filter(Boolean);
+      } catch { /* offline / RLS — fall back to the static catalog only */ }
+      if (!on) return;
+      const seen = new Set<string>();
+      const merged: string[] = [];
+      for (const tr of [...dbTrims, ...catalogTrims(mk, md)]) {
+        const k = tr.toLowerCase();
+        if (!k || seen.has(k)) continue;
+        seen.add(k); merged.push(tr);
+      }
+      setTrimSuggestions(merged.slice(0, 16));
+    }, 400);
+    return () => { on = false; clearTimeout(id); };
+  }, [make, model, readOnly]);
+  // Narrow to what the inspector is currently typing (substring match).
+  const trimSuggestionsShown = useMemo(() => {
+    const q = trim.trim().toLowerCase();
+    const list = q
+      ? trimSuggestions.filter((s) => s.toLowerCase().includes(q) && s.toLowerCase() !== q)
+      : trimSuggestions;
+    return list.slice(0, 8);
+  }, [trim, trimSuggestions]);
 
   // Photo state — record of slot key -> { local URI from camera (shown
   // instantly), remote public URL after Storage upload (used on submit).
@@ -1334,6 +1379,21 @@ export function InspectionWizardScreen({
 
             <Field label={t("details.trim")} badge={decoded.trim ? <DecodedBadge t={t} /> : null}>
               <TextInput value={trim} onChangeText={(v) => { markEdited("trim"); setTrim(v); }} style={styles.input} editable={!readOnly} placeholder="GT3, SVJ, EX-V6" placeholderTextColor={theme.colors.textLight} />
+              {!readOnly && trimSuggestionsShown.length > 0 && (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  style={styles.trimSuggestRow}
+                  contentContainerStyle={{ gap: 6, paddingRight: 4 }}
+                >
+                  {trimSuggestionsShown.map((s) => (
+                    <Pressable key={s} onPress={() => { markEdited("trim"); setTrim(s); }} style={styles.trimChip} hitSlop={4}>
+                      <Text style={styles.trimChipText}>{s}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              )}
             </Field>
 
             <View style={{ flexDirection: "row", gap: 10 }}>
@@ -1399,6 +1459,13 @@ export function InspectionWizardScreen({
                     ? t("details.estComparable", { count: marketEstimate.dataPoints })
                     : t("details.estReference")}
                 </Text>
+                {/* Trim-driven feedback: confirm the figure reflects the chosen
+                    trim, or nudge the inspector to set it for a sharper price. */}
+                {trim.trim()
+                  ? marketEstimate.trimMatched && (
+                      <Text style={styles.estTrimNote}>{t("details.estTrimMatched", { trim: trim.trim() })}</Text>
+                    )
+                  : <Text style={styles.estTrimNote}>{t("details.estModelOnly")}</Text>}
               </View>
             )}
 
@@ -2292,6 +2359,10 @@ const styles = StyleSheet.create({
   estColLabel: { fontSize: 10, fontWeight: "800", color: theme.colors.textLight, textTransform: "uppercase", letterSpacing: 0.5 },
   estColValue: { fontSize: 15, fontWeight: "800", color: theme.colors.text, marginTop: 3 },
   estNote: { fontSize: 11, color: theme.colors.textMuted, marginTop: 10, lineHeight: 15 },
+  estTrimNote: { fontSize: 11, fontWeight: "600", color: theme.colors.brand, marginTop: 4, lineHeight: 15 },
+  trimSuggestRow: { marginTop: 8 },
+  trimChip: { backgroundColor: theme.colors.brandLight, borderColor: theme.colors.brand, borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+  trimChipText: { fontSize: 12, fontWeight: "600", color: theme.colors.brand },
 
   // Photo grid
   photoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },

@@ -1,10 +1,12 @@
 // Vehicle market valuation engine.
 //
 // PRIMARY: getMarketValuation() calls the "valuation-proxy" Supabase Edge
-// Function (which holds the auto.dev key server-side) with the FULL model
-// string — trims matter ("458 Speciale" ≫ "458 Spider") — and aggregates the
-// returned listings into min/avg/max + the count as dataPoints
-// (source: "market_data"). The API key NEVER ships in the client bundle.
+// Function (which holds the auto.dev key server-side) with the BASE model only
+// (auto.dev returns 0 records for "Model Trim"); the trim is sent alongside for
+// logging and then used HERE to filter the returned listings by each record's
+// trim — trims matter ("458 Speciale" ≫ "458 Spider"). Matching listings are
+// aggregated into min/avg/max + the count as dataPoints (source: "market_data",
+// trimMatched true). The API key NEVER ships in the client bundle.
 //
 // FALLBACK: estimateValuation() uses a curated reference table + depreciation,
 // mileage and condition adjustments, with a trim multiplier so variants don't
@@ -22,11 +24,15 @@ export interface Valuation {
   confidence: "high" | "medium" | "low";
   dataPoints: number;
   source: "market_data" | "estimate";
+  // true when the figure reflects the SPECIFIC trim (live listings filtered to
+  // the trim, or an estimate whose trim multiplier matched). false ⇒ model-only.
+  trimMatched?: boolean;
 }
 
 export interface ValuationInput {
   make: string;
   model: string;
+  trim?: string;
   year: number;
   mileageKm?: number;
   condition?: Condition;
@@ -82,10 +88,13 @@ const TRIM_MULTIPLIERS: Array<{ kw: string; mult: number }> = [
   { kw: "executive",    mult: 1.12 },
 ];
 
-function trimMultiplier(model: string): number {
-  const m = ` ${model.toLowerCase()} `;
-  for (const t of TRIM_MULTIPLIERS) if (m.includes(t.kw)) return t.mult;
-  return 1;
+// Scans BOTH the model and the (now-separate) trim field for a high-value
+// keyword, so e.g. model "Aventador" + trim "SVJ" still gets the SVJ premium.
+// Returns the multiplier and whether a trim keyword actually matched.
+function trimMultiplier(model: string, trim?: string): { mult: number; matched: boolean } {
+  const m = ` ${model.toLowerCase()} ${(trim ?? "").toLowerCase()} `;
+  for (const t of TRIM_MULTIPLIERS) if (m.includes(t.kw)) return { mult: t.mult, matched: true };
+  return { mult: 1, matched: false };
 }
 
 // Find the best reference entry: exact make, then the longest model key the
@@ -122,10 +131,10 @@ export function estimateValuation(input: ValuationInput): Valuation {
   const matched = ref != null;
   const base = ref?.base ?? 40_000; // generic fallback for unknown make
 
-  const trim = matched ? trimMultiplier(input.model) : 1;
+  const tm = matched ? trimMultiplier(input.model, input.trim) : { mult: 1, matched: false };
   const condition = CONDITION_MULT[input.condition ?? "good"];
 
-  let avg = base * depreciationFactor(age) * trim * condition;
+  let avg = base * depreciationFactor(age) * tm.mult * condition;
 
   // Mileage adjustment vs expected mileage for the age.
   const kmPerYear = ref?.kmPerYear ?? DEFAULT_KM_PER_YEAR;
@@ -144,6 +153,7 @@ export function estimateValuation(input: ValuationInput): Valuation {
     confidence: matched ? "medium" : "low",
     dataPoints: 0,
     source: "estimate",
+    trimMatched: tm.matched,
   };
 }
 
@@ -152,30 +162,63 @@ export function estimateValuation(input: ValuationInput): Valuation {
  * the payload has no usable prices. Pure — the network call (and the API key)
  * live in the valuation-proxy Edge Function, not in this client.
  */
-function parseListings(payload: unknown): Valuation | null {
+// Pull a usable USD price from an auto.dev listing record. The real number is
+// `priceUnformatted`; `price` is often a STRING ("accepting_offers", "call")
+// for exotics, so never parse it directly. Falls back to basePrice/pricePlusFees.
+function recordPriceUsd(o: Record<string, unknown>): number {
+  for (const k of ["priceUnformatted", "basePrice", "pricePlusFees", "priceMobile"]) {
+    const n = Number(o[k]);
+    if (Number.isFinite(n) && n > 1000) return n;
+  }
+  const p = o.price; // only if it's actually numeric (not "accepting_offers")
+  if (typeof p === "number" && p > 1000) return p;
+  return 0;
+}
+
+function matchesTrim(recordTrim: string, wanted: string): boolean {
+  const rt = recordTrim.toLowerCase();
+  const w = wanted.toLowerCase().trim();
+  if (!w) return true;
+  if (rt.includes(w)) return true;
+  // Token overlap — the distinctive bits ("svj", "gt3 rs", "performante").
+  return w.split(/[\s-]+/).filter((t) => t.length >= 2).some((tok) => rt.includes(tok));
+}
+
+/**
+ * Aggregate an auto.dev listings payload into a Valuation. When `wantedTrim` is
+ * set, prefer records whose listing trim matches it (so SVJ ≫ base Aventador);
+ * if too few trim-matched listings have a price, fall back to all priced
+ * records and flag trimMatched=false. Returns null when no usable price exists.
+ */
+function parseListings(payload: unknown, wantedTrim?: string): Valuation | null {
   const d = (payload ?? {}) as { records?: unknown[]; listings?: unknown[]; data?: unknown[] };
-  const records: unknown[] = d.records ?? d.listings ?? d.data ?? [];
-  const prices = records
-    .map((r) => {
-      if (r && typeof r === "object") {
-        const o = r as Record<string, unknown>;
-        return Number(o.price ?? o.priceUnformatted ?? o.listing_price);
-      }
-      return Number(r);
-    })
-    .filter((n) => Number.isFinite(n) && n > 1000)
-    .map((usd) => usd * USD_TO_EUR);
-  if (prices.length === 0) return null;
-  const sorted = prices.sort((a, b) => a - b);
-  const avg = sorted.reduce((s, n) => s + n, 0) / sorted.length;
+  const records = (d.records ?? d.listings ?? d.data ?? []) as Record<string, unknown>[];
+
+  const priced = records
+    .filter((r) => r && typeof r === "object")
+    .map((r) => ({ price: recordPriceUsd(r), trim: String(r.trim ?? "") }))
+    .filter((x) => x.price > 1000);
+  if (priced.length === 0) return null;
+
+  // Prefer trim-matched listings when we have enough of them.
+  let used = priced;
+  let trimMatched = false;
+  if (wantedTrim && wantedTrim.trim()) {
+    const matched = priced.filter((x) => matchesTrim(x.trim, wantedTrim));
+    if (matched.length >= 3) { used = matched; trimMatched = true; }
+  }
+
+  const prices = used.map((x) => x.price * USD_TO_EUR).sort((a, b) => a - b);
+  const avg = prices.reduce((s, n) => s + n, 0) / prices.length;
   const round = (n: number) => Math.round(n / 100) * 100;
   return {
-    minEur: round(sorted[0]),
+    minEur: round(prices[0]),
     avgEur: round(avg),
-    maxEur: round(sorted[sorted.length - 1]),
-    confidence: sorted.length >= 10 ? "high" : sorted.length >= 4 ? "medium" : "low",
-    dataPoints: sorted.length,
+    maxEur: round(prices[prices.length - 1]),
+    confidence: prices.length >= 10 ? "high" : prices.length >= 4 ? "medium" : "low",
+    dataPoints: prices.length,
     source: "market_data",
+    trimMatched,
   };
 }
 
@@ -189,14 +232,24 @@ export async function getMarketValuation(input: ValuationInput): Promise<Valuati
     const { data, error } = await supabase.functions.invoke("valuation-proxy", {
       body: {
         make: input.make,
-        model: input.model, // full string incl. variant/trim
+        model: input.model, // BASE model only — auto.dev returns 0 for "Model Trim"
+        trim: input.trim,   // forwarded for logging; trim filtering happens here
         year: input.year,
         mileage: input.mileageKm,
       },
     });
     if (!error && data) {
-      const live = parseListings(data);
-      if (live) return live;
+      const live = parseListings(data, input.trim);
+      // Use live data only when it actually reflects the trim, or when the
+      // offline table has no trim premium to offer anyway. Otherwise the
+      // trim-aware estimate (e.g. SVJ multiplier) is the more honest figure.
+      if (live) {
+        const est = estimateValuation(input);
+        if (live.trimMatched || !est.trimMatched) return live;
+        // Live data exists but isn't trim-specific AND the estimate has a trim
+        // premium → prefer the estimate (model-only live would understate SVJ).
+        return est;
+      }
     }
   } catch {
     // network / invoke failure — fall through to the offline estimate
@@ -206,9 +259,13 @@ export async function getMarketValuation(input: ValuationInput): Promise<Valuati
 
 /** Human label for a valuation's provenance. */
 export function valuationLabel(v: Valuation): string {
-  return v.source === "market_data"
-    ? `Based on ${v.dataPoints} comparable listing${v.dataPoints === 1 ? "" : "s"} across EU markets`
-    : "Estimated from market data — verify with live listings";
+  if (v.source === "market_data") {
+    const base = `Based on ${v.dataPoints} comparable listing${v.dataPoints === 1 ? "" : "s"} across EU markets`;
+    return v.trimMatched ? base : `${base} — model only, trim adjustment recommended`;
+  }
+  return v.trimMatched
+    ? "Trim-adjusted estimate — verify with live listings"
+    : "Market estimate based on model only — trim adjustment recommended";
 }
 
 /** Where a price sits relative to the range: below min / fair / above max. */
