@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform,
+  ActivityIndicator, Alert, Image, InteractionManager, KeyboardAvoidingView, Modal, Platform,
   Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
@@ -34,9 +34,16 @@ export function LoginScreen({ navigation }: { navigation: { navigate: (s: string
       Alert.alert(t("auth.signInFailed"), error.message);
       return;
     }
-    // Push is best-effort — Expo Go SDK 53+ removed push token support so
-    // wrap defensively so a sync throw can't take the app down.
-    try { void registerForPush().catch(() => {}); } catch { /* silent */ }
+    // Push is best-effort AND deferred off the login transition. The original
+    // first-login crash was a native push-registration call firing during the
+    // auth->app navigation swap on a build with no push entitlement.
+    // registerForPush is already gated to a no-op (lib/push.ts), but we ALSO
+    // wait for the navigation animation + initial render to settle before
+    // calling it, so when push is eventually enabled nothing native ever runs
+    // inside that fragile transition window. Belt-and-suspenders, OTA-safe.
+    InteractionManager.runAfterInteractions(() => {
+      try { void registerForPush().catch(() => {}); } catch { /* silent */ }
+    });
   };
 
   const openReset = () => {

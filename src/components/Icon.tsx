@@ -14,7 +14,8 @@ export type IconName =
   | "log-out-outline" | "mail-outline" | "pricetag-outline" | "trash-outline"
   | "warning-outline" | "eye-off-outline" | "folder-open-outline" | "cloud-upload-outline"
   | "globe-outline" | "search-outline" | "close-circle" | "chevron-down" | "chevron-up"
-  | "color-palette-outline" | "images-outline" | "key-outline";
+  | "color-palette-outline" | "images-outline" | "key-outline"
+  | "person-outline" | "clipboard-outline";
 
 export function Icon({
   name,
@@ -93,6 +94,10 @@ export function Icon({
       return <Svg {...p}><Circle cx="12" cy="12" r="10" /><Line x1="2" y1="12" x2="22" y2="12" /><Path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></Svg>;
     case "key-outline":
       return <Svg {...p}><Circle cx="7.5" cy="15.5" r="4.5" /><Path d="M10.7 12.3 19 4" /><Path d="M16 7l3 3" /><Path d="M14 9l3 3" /></Svg>;
+    case "person-outline":
+      return <Svg {...p}><Circle cx="12" cy="8" r="4" /><Path d="M5.5 20.5a7.5 7.5 0 0 1 13 0" /></Svg>;
+    case "clipboard-outline":
+      return <Svg {...p}><Path d="M9 4H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2" /><Rect x="9" y="2" width="6" height="4" rx="1" /></Svg>;
     default:
       // Unknown name — render a neutral dot so layout never breaks.
       return <Svg {...p}><Circle cx="12" cy="12" r="9" /></Svg>;

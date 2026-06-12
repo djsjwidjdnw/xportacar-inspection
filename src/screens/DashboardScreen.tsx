@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform,
-  Pressable, RefreshControl, StyleSheet, Text, TextInput, View,
+  FlatList, Pressable, RefreshControl, StyleSheet, Text, View,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Icon } from "../components/Icon";
@@ -15,7 +14,7 @@ import { useAuth } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 import { theme, formatKm } from "../lib/theme";
 import { confirmAsync, notify } from "../lib/ui";
-import { useTranslation, SUPPORTED, LANG_LABELS, type Locale } from "../lib/i18n";
+import { useTranslation } from "../lib/i18n";
 import type { VehicleRow } from "../lib/types";
 
 type TFunc = (key: string, values?: Record<string, string | number>) => string;
@@ -42,8 +41,8 @@ interface CompletedVehicle extends AssignedVehicle {
 type Section = { section: "drafts" } | { section: "changes" } | { section: "assigned" } | { section: "completed" };
 
 export function DashboardScreen({ navigation }: { navigation: { navigate: (s: string, p?: object) => void } }) {
-  const { user, signOut } = useAuth();
-  const { t, locale, setLocale, switchingLocale } = useTranslation();
+  const { user } = useAuth();
+  const { t } = useTranslation();
   const [assigned, setAssigned] = useState<AssignedVehicle[]>([]);
   const [changesRequested, setChangesRequested] = useState<AssignedVehicle[]>([]);
   const [completed, setCompleted] = useState<CompletedVehicle[]>([]);
@@ -51,72 +50,6 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
-
-  // Account deletion modal. The inspector app has no settings screen, so the
-  // delete flow lives next to the sign-out button in the dashboard hero.
-  const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState("");
-  const [deleting, setDeleting] = useState(false);
-
-  // Change-password modal. Lives next to delete/sign-out for the same reason —
-  // there's no settings screen. Re-verifies the current password, then updates.
-  const [pwOpen, setPwOpen] = useState(false);
-  const [pwCurrent, setPwCurrent] = useState("");
-  const [pwNew, setPwNew] = useState("");
-  const [pwConfirm, setPwConfirm] = useState("");
-  const [pwShowCurrent, setPwShowCurrent] = useState(false);
-  const [pwShowNew, setPwShowNew] = useState(false);
-  const [pwShowConfirm, setPwShowConfirm] = useState(false);
-  const [pwSaving, setPwSaving] = useState(false);
-
-  const openChangePassword = () => {
-    setPwCurrent(""); setPwNew(""); setPwConfirm("");
-    setPwShowCurrent(false); setPwShowNew(false); setPwShowConfirm(false);
-    setPwOpen(true);
-  };
-
-  // Validate, re-verify the current password (Supabase has no "verify" call, so
-  // we sign in again with it), then update to the new one.
-  const changePassword = async () => {
-    if (pwSaving) return;
-    if (pwNew.length < 8) { notify(t("pw.change"), t("pw.tooShort")); return; }
-    if (pwNew !== pwConfirm) { notify(t("pw.change"), t("pw.noMatch")); return; }
-    const email = user?.email;
-    if (!email) { notify(t("pw.change"), t("pw.changeFailed")); return; }
-    setPwSaving(true);
-    try {
-      const { error: verifyErr } = await supabase.auth.signInWithPassword({ email, password: pwCurrent });
-      if (verifyErr) { notify(t("pw.change"), t("pw.currentWrong")); return; }
-      const { error: updateErr } = await supabase.auth.updateUser({ password: pwNew });
-      if (updateErr) { notify(t("pw.change"), t("pw.changeFailed")); return; }
-      setPwOpen(false);
-      notify(t("pw.change"), t("pw.changed"));
-    } catch {
-      notify(t("pw.change"), t("pw.changeFailed"));
-    } finally {
-      setPwSaving(false);
-    }
-  };
-
-  // Permanently delete the signed-in inspector's account via the shared
-  // edge function, then sign out. The literal word users type stays "DELETE"
-  // in every language (case-sensitive).
-  const deleteAccount = async () => {
-    if (deleteConfirm !== "DELETE" || deleting) return;
-    setDeleting(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("delete-my-account", { body: {} });
-      if (error || (data as { ok?: boolean } | null)?.ok === false) {
-        notify(t("deleteAccount.title"), t("deleteAccount.failed"));
-        return;
-      }
-      await signOut();
-    } catch {
-      notify(t("deleteAccount.title"), t("deleteAccount.failed"));
-    } finally {
-      setDeleting(false);
-    }
-  };
 
   // Pull every saved draft out of AsyncStorage. We scan all keys with
   // the `xpc_inspection_draft:` prefix, parse them, and surface them
@@ -265,7 +198,8 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
         contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
         ListHeaderComponent={
           <View>
-            {/* Hero with stat cards */}
+            {/* Hero with stat cards. Account actions (sign out, password,
+                language, delete) now live on the Profile tab. */}
             <LinearGradient
               colors={["#101828", theme.colors.brand]}
               start={{ x: 0, y: 0 }}
@@ -278,9 +212,6 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                   <Text style={styles.heroTitle}>{t(greetingKey())}</Text>
                   <Text style={styles.heroSub}>{user?.email}</Text>
                 </View>
-                <Pressable onPress={signOut} hitSlop={8} style={styles.signOutBtn}>
-                  <Icon name="log-out-outline" size={18} color={theme.colors.white} />
-                </Pressable>
               </View>
 
               <View style={styles.statsRow}>
@@ -288,61 +219,7 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
                 <View style={styles.statDivider} />
                 <Stat label={t("dash.completed")} value={completed.length} icon="checkmark-done-outline" />
               </View>
-
-              {/* Account actions — no settings screen exists, so change-password
-                  and the destructive delete live in the hero alongside sign-out. */}
-              <View style={styles.accountActionsRow}>
-                <Pressable
-                  onPress={openChangePassword}
-                  hitSlop={6}
-                  style={({ pressed }) => [styles.changePwBtn, pressed && { opacity: 0.7 }]}
-                >
-                  <Icon name="key-outline" size={14} color="rgba(255,255,255,0.92)" />
-                  <Text style={styles.changePwText}>{t("pw.change")}</Text>
-                </Pressable>
-
-                <View style={styles.accountActionsDivider} />
-
-                <Pressable
-                  onPress={() => { setDeleteConfirm(""); setDeleteOpen(true); }}
-                  hitSlop={6}
-                  style={({ pressed }) => [styles.deleteAccountBtn, pressed && { opacity: 0.7 }]}
-                >
-                  <Icon name="trash-outline" size={14} color="#FDA29B" />
-                  <Text style={styles.deleteAccountText}>{t("deleteAccount.button")}</Text>
-                </Pressable>
-              </View>
             </LinearGradient>
-
-            {/* Language switcher — mirrors the buyer app's flag+label picker.
-                The inspector app has no settings screen, so it lives in the
-                dashboard header where it's always reachable. */}
-            <View style={styles.langRow}>
-              <Icon name="globe-outline" size={13} color={theme.colors.textLight} />
-              <Text style={styles.langRowLabel}>{t("dash.language")}</Text>
-              <View style={{ flex: 1 }} />
-              {switchingLocale && (
-                <ActivityIndicator size="small" color={theme.colors.brand} style={{ marginRight: 6 }} />
-              )}
-              <View style={styles.langBtns}>
-                {SUPPORTED.map((code: Locale) => {
-                  const active = locale === code;
-                  return (
-                    <Pressable
-                      key={code}
-                      onPress={() => void setLocale(code)}
-                      disabled={switchingLocale}
-                      style={({ pressed }) => [styles.langBtn, active && styles.langBtnActive, (pressed || switchingLocale) && { opacity: 0.9 }]}
-                      accessibilityRole="button"
-                      accessibilityLabel={LANG_LABELS[code].label}
-                    >
-                      <Text style={styles.langFlag}>{LANG_LABELS[code].flag}</Text>
-                      <Text style={[styles.langCode, active && { color: theme.colors.brand }]}>{code.toUpperCase()}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
 
             {/* New inspection CTA */}
             <Pressable
@@ -541,178 +418,6 @@ export function DashboardScreen({ navigation }: { navigation: { navigate: (s: st
           </View>
         )}
       />
-
-      {/* Delete account confirmation modal */}
-      <Modal
-        visible={deleteOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => { if (!deleting) setDeleteOpen(false); }}
-      >
-        <KeyboardAvoidingView
-          style={styles.delBackdrop}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-        >
-          <View style={styles.delSheet}>
-            <View style={styles.delHeader}>
-              <View style={styles.delIconWrap}>
-                <Icon name="warning-outline" size={22} color={theme.colors.error} />
-              </View>
-              <Text style={styles.delTitle}>{t("deleteAccount.title")}</Text>
-              <Pressable onPress={() => { if (!deleting) setDeleteOpen(false); }} hitSlop={10} disabled={deleting}>
-                <Icon name="close" size={22} color={theme.colors.textMuted} />
-              </Pressable>
-            </View>
-
-            <Text style={styles.delWarning}>{t("deleteAccount.warning")}</Text>
-
-            <Text style={styles.delLoseIntro}>{t("deleteAccount.loseIntro")}</Text>
-            <Bullet>{t("deleteAccount.loseBids")}</Bullet>
-            <Bullet>{t("deleteAccount.loseInspections")}</Bullet>
-            <Bullet>{t("deleteAccount.loseInvoices")}</Bullet>
-
-            <Text style={styles.delCannotUndo}>{t("deleteAccount.cannotUndo")}</Text>
-
-            <Text style={styles.delInputLabel}>{t("deleteAccount.typeToConfirm")}</Text>
-            <TextInput
-              value={deleteConfirm}
-              onChangeText={setDeleteConfirm}
-              placeholder="DELETE"
-              placeholderTextColor={theme.colors.textLight}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              editable={!deleting}
-              style={styles.delInput}
-            />
-
-            <Pressable
-              onPress={deleteAccount}
-              disabled={deleteConfirm !== "DELETE" || deleting}
-              style={({ pressed }) => [
-                styles.delConfirmBtn,
-                (deleteConfirm !== "DELETE" || deleting) && { opacity: 0.5 },
-                pressed && { opacity: 0.9 },
-              ]}
-            >
-              {deleting && <ActivityIndicator size="small" color={theme.colors.white} />}
-              <Text style={styles.delConfirmText}>
-                {deleting ? t("deleteAccount.deleting") : t("deleteAccount.confirm")}
-              </Text>
-            </Pressable>
-
-            <Pressable
-              onPress={() => { if (!deleting) setDeleteOpen(false); }}
-              disabled={deleting}
-              style={({ pressed }) => [styles.delCancelBtn, pressed && { opacity: 0.7 }]}
-            >
-              <Text style={styles.delCancelText}>{t("deleteAccount.cancel")}</Text>
-            </Pressable>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      {/* Change password modal */}
-      <Modal
-        visible={pwOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => { if (!pwSaving) setPwOpen(false); }}
-      >
-        <KeyboardAvoidingView
-          style={styles.delBackdrop}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-        >
-          <View style={styles.delSheet}>
-            <View style={styles.delHeader}>
-              <View style={styles.pwIconWrap}>
-                <Icon name="key-outline" size={20} color={theme.colors.brand} />
-              </View>
-              <Text style={styles.delTitle}>{t("pw.change")}</Text>
-              <Pressable onPress={() => { if (!pwSaving) setPwOpen(false); }} hitSlop={10} disabled={pwSaving}>
-                <Icon name="close" size={22} color={theme.colors.textMuted} />
-              </Pressable>
-            </View>
-
-            <PwField
-              label={t("pw.current")}
-              value={pwCurrent}
-              onChangeText={setPwCurrent}
-              show={pwShowCurrent}
-              onToggleShow={() => setPwShowCurrent((v) => !v)}
-              editable={!pwSaving}
-            />
-            <PwField
-              label={t("pw.new")}
-              value={pwNew}
-              onChangeText={setPwNew}
-              show={pwShowNew}
-              onToggleShow={() => setPwShowNew((v) => !v)}
-              editable={!pwSaving}
-            />
-            <Text style={styles.pwHint}>{t("pw.min8")}</Text>
-            <PwField
-              label={t("pw.confirm")}
-              value={pwConfirm}
-              onChangeText={setPwConfirm}
-              show={pwShowConfirm}
-              onToggleShow={() => setPwShowConfirm((v) => !v)}
-              editable={!pwSaving}
-            />
-
-            <Pressable
-              onPress={changePassword}
-              disabled={pwSaving}
-              style={({ pressed }) => [styles.pwSaveBtn, pwSaving && { opacity: 0.6 }, pressed && { opacity: 0.9 }]}
-            >
-              {pwSaving && <ActivityIndicator size="small" color={theme.colors.white} />}
-              <Text style={styles.pwSaveText}>{t("pw.save")}</Text>
-            </Pressable>
-
-            <Pressable
-              onPress={() => { if (!pwSaving) setPwOpen(false); }}
-              disabled={pwSaving}
-              style={({ pressed }) => [styles.delCancelBtn, pressed && { opacity: 0.7 }]}
-            >
-              <Text style={styles.delCancelText}>{t("pw.cancel")}</Text>
-            </Pressable>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-    </View>
-  );
-}
-
-// A labelled password input with a show/hide eye — used three times in the
-// change-password modal.
-function PwField({
-  label, value, onChangeText, show, onToggleShow, editable,
-}: {
-  label: string;
-  value: string;
-  onChangeText: (v: string) => void;
-  show: boolean;
-  onToggleShow: () => void;
-  editable: boolean;
-}) {
-  return (
-    <View>
-      <Text style={styles.pwLabel}>{label}</Text>
-      <View style={styles.pwInputWrap}>
-        <TextInput
-          value={value}
-          onChangeText={onChangeText}
-          secureTextEntry={!show}
-          autoCapitalize="none"
-          autoCorrect={false}
-          editable={editable}
-          placeholderTextColor={theme.colors.textLight}
-          style={styles.pwInput}
-          placeholder="••••••••"
-        />
-        <Pressable onPress={onToggleShow} hitSlop={8} style={styles.pwEyeBtn}>
-          <Icon name={show ? "eye-off-outline" : "eye-outline"} size={18} color={theme.colors.textLight} />
-        </Pressable>
-      </View>
     </View>
   );
 }
@@ -732,16 +437,6 @@ function Meta({ icon, children }: { icon: string; children: React.ReactNode }) {
     <View style={styles.metaPill}>
       <Icon name={icon} size={11} color={theme.colors.textMuted} />
       <Text style={styles.metaText}>{children}</Text>
-    </View>
-  );
-}
-
-// A single bulleted "you will lose…" line inside the delete-account modal.
-function Bullet({ children }: { children: React.ReactNode }) {
-  return (
-    <View style={styles.delBullet}>
-      <View style={styles.delBulletDot} />
-      <Text style={styles.delBulletText}>{children}</Text>
     </View>
   );
 }
@@ -777,11 +472,6 @@ const styles = StyleSheet.create({
   heroEyebrow: { color: "rgba(255,255,255,0.7)", fontSize: 10, fontWeight: "800", letterSpacing: 1.2 },
   heroTitle: { color: theme.colors.white, fontSize: 24, fontWeight: "800", marginTop: 4, textTransform: "capitalize" },
   heroSub: { color: "rgba(255,255,255,0.75)", fontSize: 12, marginTop: 4 },
-  signOutBtn: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.15)",
-    alignItems: "center", justifyContent: "center",
-  },
   statsRow: {
     flexDirection: "row", alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.12)",
@@ -808,19 +498,6 @@ const styles = StyleSheet.create({
   },
   ctaTitle: { color: theme.colors.white, fontSize: 14, fontWeight: "800" },
   ctaSub: { color: "rgba(255,255,255,0.8)", fontSize: 11, marginTop: 2 },
-
-  // Language switcher (flag + code pills) — matches the buyer app's pattern.
-  langRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 18, paddingHorizontal: 2 },
-  langRowLabel: { fontSize: 11, fontWeight: "800", color: theme.colors.textLight, textTransform: "uppercase", letterSpacing: 0.6 },
-  langBtns: { flexDirection: "row", gap: 6 },
-  langBtn: {
-    flexDirection: "row", alignItems: "center", gap: 4,
-    paddingHorizontal: 8, paddingVertical: 5, borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.white, borderWidth: 1, borderColor: theme.colors.border,
-  },
-  langBtnActive: { borderColor: theme.colors.brand, backgroundColor: theme.colors.brandLight },
-  langFlag: { fontSize: 13 },
-  langCode: { fontSize: 11, fontWeight: "800", color: theme.colors.textMuted, letterSpacing: 0.3 },
 
   sectionHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 10, paddingHorizontal: 2 },
   sectionTitle: { fontSize: 11, fontWeight: "800", color: theme.colors.textLight, textTransform: "uppercase", letterSpacing: 0.6 },
@@ -876,63 +553,4 @@ const styles = StyleSheet.create({
   // "In review" tag (pending_review)
   reviewTag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: theme.radius.full, backgroundColor: theme.colors.brandLight },
   reviewTagText: { fontSize: 10, fontWeight: "800", color: theme.colors.brand, textTransform: "uppercase", letterSpacing: 0.4 },
-
-  // Account actions row (change password | delete) inside the (dark) hero
-  accountActionsRow: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center",
-    marginTop: 14,
-  },
-  accountActionsDivider: { width: 1, height: 16, backgroundColor: "rgba(255,255,255,0.2)", marginHorizontal: 4 },
-  changePwBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-    paddingVertical: 6, paddingHorizontal: 10,
-  },
-  changePwText: { color: "rgba(255,255,255,0.92)", fontSize: 12, fontWeight: "800" },
-
-  // Delete account — destructive link inside the (dark) hero
-  deleteAccountBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-    paddingVertical: 6, paddingHorizontal: 10,
-  },
-  deleteAccountText: { color: "#FDA29B", fontSize: 12, fontWeight: "800" },
-
-  // Change-password modal (reuses delBackdrop / delSheet / delHeader / delTitle)
-  pwIconWrap: { width: 40, height: 40, borderRadius: 20, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center" },
-  pwLabel: { fontSize: 11, fontWeight: "800", color: theme.colors.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 },
-  pwInputWrap: {
-    flexDirection: "row", alignItems: "center",
-    height: 48, borderRadius: theme.radius.md, borderWidth: 1,
-    borderColor: theme.colors.border, backgroundColor: theme.colors.white,
-    paddingHorizontal: 14,
-  },
-  pwInput: { flex: 1, fontSize: 15, color: theme.colors.text },
-  pwEyeBtn: { padding: 4 },
-  pwHint: { fontSize: 11, color: theme.colors.textLight, fontWeight: "600", marginTop: -4 },
-  pwSaveBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    height: 48, borderRadius: theme.radius.lg, backgroundColor: theme.colors.brand, marginTop: 4,
-  },
-  pwSaveText: { color: theme.colors.white, fontWeight: "800", fontSize: 15 },
-
-  // Delete account confirmation modal
-  delBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 },
-  delSheet: { backgroundColor: theme.colors.white, borderRadius: 20, padding: 20, gap: 12 },
-  delHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
-  delIconWrap: { width: 40, height: 40, borderRadius: 20, backgroundColor: theme.colors.errorBg, alignItems: "center", justifyContent: "center" },
-  delTitle: { flex: 1, fontSize: 17, fontWeight: "800", color: theme.colors.text },
-  delWarning: { fontSize: 13, color: theme.colors.textMuted, lineHeight: 19 },
-  delLoseIntro: { fontSize: 13, fontWeight: "800", color: theme.colors.text, marginTop: 2 },
-  delBullet: { flexDirection: "row", alignItems: "center", gap: 8, paddingLeft: 4 },
-  delBulletDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: theme.colors.textMuted },
-  delBulletText: { flex: 1, fontSize: 13, color: theme.colors.textMuted },
-  delCannotUndo: { fontSize: 13, fontWeight: "800", color: theme.colors.error, marginTop: 4 },
-  delInputLabel: { fontSize: 11, fontWeight: "800", color: theme.colors.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 4 },
-  delInput: { height: 46, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.border, paddingHorizontal: 14, color: theme.colors.text, fontSize: 14, backgroundColor: theme.colors.white },
-  delConfirmBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    height: 48, borderRadius: theme.radius.lg, backgroundColor: theme.colors.error, marginTop: 4,
-  },
-  delConfirmText: { color: theme.colors.white, fontWeight: "800", fontSize: 15 },
-  delCancelBtn: { height: 44, alignItems: "center", justifyContent: "center" },
-  delCancelText: { color: theme.colors.textMuted, fontWeight: "800", fontSize: 14 },
 });
