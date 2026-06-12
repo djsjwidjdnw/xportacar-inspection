@@ -48,6 +48,7 @@ export interface AutosavePayload {
   vehicleSummary?: string; // "2023 BMW X5" etc — surfaced in the drafts list.
   step: number;
   vin: string; make: string; model: string; year: string;
+  trim?: string; // optional so older drafts still parse.
   mileage: string; color: string; city: string;
   sellerName: string; sellerPhone: string;
   startingPrice: string; reservePrice: string;
@@ -349,6 +350,7 @@ export function InspectionWizardScreen({
   const [vin, setVin] = useState("");
   const [make, setMake] = useState("");
   const [model, setModel] = useState("");
+  const [trim, setTrim] = useState("");
   const [year, setYear] = useState("");
   const [mileage, setMileage] = useState("");
   const [color, setColor] = useState("");
@@ -466,6 +468,7 @@ export function InspectionWizardScreen({
         setVin(v.vin ?? "");
         setMake(v.make ?? "");
         setModel(v.model ?? "");
+        setTrim((v as { trim?: string }).trim ?? "");
         setYear(String(v.year ?? ""));
         setMileage(String(v.mileage_km ?? ""));
         setColor(v.exterior_color ?? "");
@@ -492,7 +495,7 @@ export function InspectionWizardScreen({
         // fills blanks rather than overwriting saved values.
         const edited = manuallyEditedRef.current;
         for (const [k, val] of Object.entries({
-          make: v.make, model: v.model, year: v.year, bodyType: v.body_type,
+          make: v.make, model: v.model, trim: (v as { trim?: string }).trim, year: v.year, bodyType: v.body_type,
           engine: v.engine, drivetrain: v.drivetrain, transmission: v.transmission, fuelType: v.fuel_type,
         })) { if (val) edited.add(k); }
       }
@@ -534,7 +537,7 @@ export function InspectionWizardScreen({
           return;
         }
         if (!data.vin && !data.make && !data.model) return;
-        setVin(data.vin); setMake(data.make); setModel(data.model); setYear(data.year);
+        setVin(data.vin); setMake(data.make); setModel(data.model); setTrim(data.trim ?? ""); setYear(data.year);
         setMileage(data.mileage); setColor(data.color); setCity(data.city);
         setSellerName(data.sellerName); setSellerPhone(data.sellerPhone);
         setStartingPrice(data.startingPrice); setReservePrice(data.reservePrice);
@@ -554,7 +557,7 @@ export function InspectionWizardScreen({
         // Protect drafted values from a later VIN re-decode (fills blanks only).
         const edited = manuallyEditedRef.current;
         for (const [k, val] of Object.entries({
-          make: data.make, model: data.model, year: data.year, bodyType: data.bodyType,
+          make: data.make, model: data.model, trim: data.trim, year: data.year, bodyType: data.bodyType,
           engine: data.engine, drivetrain: data.drivetrain, transmission: data.transmission, fuelType: data.fuelType,
         })) { if (val) edited.add(k); }
         setStep(data.step);
@@ -577,6 +580,7 @@ export function InspectionWizardScreen({
       vehicleSummary: summary,
       step,
       vin, make, model, year, mileage, color, city,
+      trim: trim || undefined,
       sellerName, sellerPhone, startingPrice, reservePrice,
       notes,
       bodyType, engine, drivetrain,
@@ -588,7 +592,7 @@ export function InspectionWizardScreen({
     void AsyncStorage.setItem(autosaveKey, JSON.stringify(payload)).catch(() => {});
   }, [
     autosaveKey, viewMode, incomingId, user, step,
-    vin, make, model, year, mileage, color, city,
+    vin, make, model, trim, year, mileage, color, city,
     sellerName, sellerPhone, startingPrice, reservePrice,
     notes, bodyType, engine, drivetrain, transmission, fuelType, marketSpec,
     paintReadings,
@@ -627,6 +631,7 @@ export function InspectionWizardScreen({
       setModelOther(!isKnownModel(d.make ?? "", d.model));
       next.model = true;
     }
+    if (d.trim && !edited.has("trim")) { setTrim(d.trim); next.trim = true; }
     if (d.year && !edited.has("year")) { setYear(d.year); next.year = true; }
     if (d.bodyType && !edited.has("bodyType")) { setBodyType(d.bodyType); setBodyTypeOther(!isKnownBodyType(d.bodyType)); next.bodyType = true; }
     if (d.engine && !edited.has("engine")) { setEngine(d.engine); next.engine = true; }
@@ -972,6 +977,7 @@ export function InspectionWizardScreen({
         vin: vin.trim().toUpperCase(),
         make: make.trim(),
         model: model.trim(),
+        trim: trim.trim() || null,
         year: Number(year) || 0,
         mileage_km: Number(mileage) || 0,
         exterior_color: color || null,
@@ -1286,6 +1292,16 @@ export function InspectionWizardScreen({
             {vinStatus === "fail" && !readOnly && (
               <Text style={styles.vinFailText}>{t("details.vinDecodeFail")}</Text>
             )}
+            {/* Non-error info banner: the VIN decoded OK but came back sparse —
+                more than 5 of the key spec fields are still blank. Fields stay
+                editable so the inspector can fill the gaps manually. */}
+            {vinStatus === "ok" && !readOnly &&
+              [model, trim, transmission, drivetrain, fuelType, bodyType, engine]
+                .filter((f) => !String(f).trim()).length > 5 && (
+              <View style={styles.vinInfoBanner}>
+                <Text style={styles.vinInfoText}>{t("details.vinLimited")}</Text>
+              </View>
+            )}
 
             <View style={{ flexDirection: "row", gap: 10 }}>
               <Field label={t("details.make")} required style={{ flex: 1 }} badge={decoded.make ? <DecodedBadge t={t} /> : null}>
@@ -1314,6 +1330,10 @@ export function InspectionWizardScreen({
               ) : (
                 <SelectField value={model} placeholder={make ? t("details.modelSelect") : t("details.modelSelectFirst")} onPress={() => setModelPickerOpen(true)} disabled={readOnly || !make} />
               )}
+            </Field>
+
+            <Field label={t("details.trim")} badge={decoded.trim ? <DecodedBadge t={t} /> : null}>
+              <TextInput value={trim} onChangeText={(v) => { markEdited("trim"); setTrim(v); }} style={styles.input} editable={!readOnly} placeholder="GT3, SVJ, EX-V6" placeholderTextColor={theme.colors.textLight} />
             </Field>
 
             <View style={{ flexDirection: "row", gap: 10 }}>
@@ -2234,6 +2254,8 @@ const styles = StyleSheet.create({
   decodingBadge: { flexDirection: "row", alignItems: "center", gap: 4 },
   decodingText: { fontSize: 10, fontWeight: "700", color: theme.colors.brand, textTransform: "uppercase", letterSpacing: 0.4 },
   vinFailText: { fontSize: 12, color: theme.colors.warning, fontWeight: "600", marginTop: -4, marginBottom: 12 },
+  vinInfoBanner: { backgroundColor: theme.colors.brandLight, borderRadius: theme.radius.md, paddingHorizontal: 12, paddingVertical: 10, marginTop: -2, marginBottom: 12 },
+  vinInfoText: { fontSize: 12, color: theme.colors.brandDark, fontWeight: "600", lineHeight: 17 },
 
   // Select (dropdown) field
   selectInput: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
