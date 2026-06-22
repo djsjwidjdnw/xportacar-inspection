@@ -264,7 +264,7 @@ export function RegisterScreen({
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>{t("isignup.phone")}</Text>
+        <Text style={styles.label}>{t("isignup.phone")} {t("isignup.optional")}</Text>
         <View style={styles.inputWrap}>
           <Icon name="document-text-outline" size={16} color={theme.colors.textLight} style={styles.inputIcon} />
           <TextInput
@@ -280,7 +280,7 @@ export function RegisterScreen({
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>{t("isignup.country")}</Text>
+        <Text style={styles.label}>{t("isignup.country")} {t("isignup.optional")}</Text>
         <View style={styles.inputWrap}>
           <Icon name="globe-outline" size={16} color={theme.colors.textLight} style={styles.inputIcon} />
           <TextInput
@@ -295,7 +295,7 @@ export function RegisterScreen({
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>{t("details.city")}</Text>
+        <Text style={styles.label}>{t("details.city")} {t("isignup.optional")}</Text>
         <View style={styles.inputWrap}>
           <Icon name="globe-outline" size={16} color={theme.colors.textLight} style={styles.inputIcon} />
           <TextInput
