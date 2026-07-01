@@ -31,7 +31,7 @@ function NotAuthorizedScreen() {
         Inspectors only
       </Text>
       <Text style={{ fontSize: 14, color: theme.colors.textMuted, textAlign: "center", marginBottom: 20, lineHeight: 20 }}>
-        This app is for XportACar field inspectors. Your account doesn&apos;t have inspector access.
+        This app is for XportACar field inspectors. This looks like a buyer account — please sign in on the XportACar website or the buyer app instead.
       </Text>
       <Pressable
         onPress={() => { void signOut(); }}

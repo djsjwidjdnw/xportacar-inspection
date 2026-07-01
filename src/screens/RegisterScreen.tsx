@@ -90,7 +90,14 @@ export function RegisterScreen({
     const { data, error } = await supabase.auth.signUp({
       email: email.trim(),
       password,
-      options: { data: { full_name: fullName, country, role: "inspector" } },
+      options: {
+        data: { full_name: fullName, country, role: "inspector" },
+        // Route the confirmation-email link to a minimal inspector page rather
+        // than the buyer pending-verification screen. Without this, Supabase
+        // falls back to the dashboard Site URL (buyer-oriented). WEB_URL is the
+        // apex host and passes through the existing /auth/confirm handler.
+        emailRedirectTo: `${WEB_URL}/auth/confirm?next=/inspector-confirmed`,
+      },
     });
     if (error) {
       Alert.alert(t("isignup.failed"), error.message);
