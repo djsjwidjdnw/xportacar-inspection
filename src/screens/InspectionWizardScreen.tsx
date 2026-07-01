@@ -358,6 +358,10 @@ export function InspectionWizardScreen({
   const [city, setCity] = useState("Dubai");
   const [sellerName, setSellerName] = useState("");
   const [sellerPhone, setSellerPhone] = useState("");
+  // Seller contact loaded from the staff-only vehicle_sellers table (it is no
+  // longer a column on vehicles). Used as the submit fallback so re-submitting
+  // an existing vehicle never wipes its seller.
+  const loadedSellerRef = useRef<{ name: string | null; phone: string | null }>({ name: null, phone: null });
   // Auction pricing — captured here so the admin sees the inspector's
   // recommendation when reviewing the vehicle.  Both are EUR; reserve is
   // optional (admin may set it later).
@@ -543,6 +547,16 @@ export function InspectionWizardScreen({
           make: v.make, model: v.model, trim: (v as { trim?: string }).trim, year: v.year, bodyType: v.body_type,
           engine: v.engine, drivetrain: v.drivetrain, transmission: v.transmission, fuelType: v.fuel_type,
         })) { if (val) edited.add(k); }
+      }
+      // Seller contact now lives in the staff-only vehicle_sellers table.
+      // Prefill the fields + remember the loaded values for the submit fallback.
+      const { data: sellerRow } = await supabase
+        .from("vehicle_sellers").select("seller_name, seller_phone").eq("vehicle_id", incomingId).maybeSingle();
+      if (sellerRow) {
+        const s = sellerRow as { seller_name?: string | null; seller_phone?: string | null };
+        loadedSellerRef.current = { name: s.seller_name ?? null, phone: s.seller_phone ?? null };
+        if (s.seller_name) setSellerName(s.seller_name);
+        if (s.seller_phone) setSellerPhone(s.seller_phone);
       }
       // Pre-fill per-panel paint-thickness readings for an existing vehicle.
       const { data: paintRows } = await supabase
@@ -1035,8 +1049,6 @@ export function InspectionWizardScreen({
         drivetrain: drivetrain.trim() || null,
         market_spec: marketSpec.trim() || null,
         status: nextStatus,
-        seller_name: sellerName || vehicle.seller_name || "Walk-in",
-        seller_phone: sellerPhone || vehicle.seller_phone || "+971-",
         inspector_id: user.id,
         inspection_date: new Date().toISOString(),
         // AED is the source of truth; the DB trigger derives the *_eur columns.
@@ -1058,6 +1070,19 @@ export function InspectionWizardScreen({
         vehicleId = (data as { id: string }).id;
       }
       if (!vehicleId) throw new Error("Couldn't create vehicle");
+
+      // Seller contact -> staff-only vehicle_sellers (no longer a vehicles
+      // column). Fall back to the loaded value so a re-submit never wipes it.
+      // Best-effort: a hiccup here must not block the inspection submit.
+      const { error: sellerErr } = await supabase.from("vehicle_sellers").upsert(
+        {
+          vehicle_id: vehicleId,
+          seller_name: sellerName.trim() || loadedSellerRef.current.name || "Walk-in",
+          seller_phone: sellerPhone.trim() || loadedSellerRef.current.phone || "+971-",
+        },
+        { onConflict: "vehicle_id" },
+      );
+      if (sellerErr && __DEV__) console.warn("[submit] vehicle_sellers upsert error:", sellerErr.message);
 
       // Required + interior + engine photos — only ones that finished
       // uploading to Storage make it into the DB; locally-only photos are

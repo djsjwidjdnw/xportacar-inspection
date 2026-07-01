@@ -31,8 +31,8 @@ export interface VehicleRow {
   buy_now_price_eur: number | null;
   description: string | null;
   features: string[] | null;
-  seller_name?: string | null;
-  seller_phone?: string | null;
+  // Seller identity/contact lives in the staff-only vehicle_sellers table
+  // (migrations 028/029), not on the vehicles row.
   inspector_id?: string | null;
   inspection_date?: string | null;
   inspection_notes?: string | null;
