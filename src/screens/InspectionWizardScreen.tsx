@@ -19,6 +19,7 @@ import { estimateValuation, getMarketValuation, type Valuation } from "../lib/va
 import { catalogTrims } from "../lib/trimCatalog";
 import { useAuth } from "../lib/auth";
 import { useTranslation, panelLabelKey } from "../lib/i18n";
+import { useBiddingEnabled } from "../lib/settings";
 import type { VehicleRow } from "../lib/types";
 import { SearchableSelect, type SelectOption } from "../components/SearchableSelect";
 import {
@@ -431,11 +432,14 @@ export function InspectionWizardScreen({
     return () => { on = false; clearTimeout(id); };
   }, [make, model, trim, year, mileage]);
   const marketEstimate = liveValuation ?? referenceEstimate;
+  // Fixed-price marketplace: the reserve is an auction-only field, shown (and
+  // auto-filled) only while app_settings.bidding_enabled is on.
+  const bidding = useBiddingEnabled();
   useEffect(() => {
     if (!marketEstimate || pricesTouched || readOnly) return;
     setStartingPrice(String(Math.round(marketEstimate.avgEur * AED_PER_EUR)));
-    setReservePrice(String(Math.round(marketEstimate.minEur * AED_PER_EUR)));
-  }, [marketEstimate, pricesTouched, readOnly]);
+    if (bidding) setReservePrice(String(Math.round(marketEstimate.minEur * AED_PER_EUR)));
+  }, [marketEstimate, pricesTouched, readOnly, bidding]);
 
   // Trim auto-suggest — distinct trims already listed for this make+model (real
   // local data, shown first) merged with the static exotic/luxury catalog as a
@@ -1512,7 +1516,7 @@ export function InspectionWizardScreen({
                   placeholderTextColor={theme.colors.textLight}
                 />
               </Field>
-              <Field label={`${t("details.reservePrice")} (AED)`} style={{ flex: 1 }}>
+              {bidding && <Field label={`${t("details.reservePrice")} (AED)`} style={{ flex: 1 }}>
                 <TextInput
                   value={reservePrice}
                   onChangeText={(v) => { setReservePrice(v.replace(/[^0-9]/g, "")); setPricesTouched(true); }}
@@ -1522,7 +1526,7 @@ export function InspectionWizardScreen({
                   placeholder={t("details.optional")}
                   placeholderTextColor={theme.colors.textLight}
                 />
-              </Field>
+              </Field>}
             </View>
             <Text style={styles.priceHint}>
               {t("details.pricingHint")}
@@ -1980,7 +1984,7 @@ export function InspectionWizardScreen({
                     <Text style={styles.reviewPriceLabel}>{t("review.startingPrice")}</Text>
                     <Text style={styles.reviewPriceValue}>AED {Number(startingPrice).toLocaleString("en-GB")}</Text>
                   </View>
-                  {reservePrice && (
+                  {bidding && reservePrice && (
                     <View style={{ flex: 1 }}>
                       <Text style={styles.reviewPriceLabel}>{t("review.reserve")}</Text>
                       <Text style={styles.reviewPriceValue}>AED {Number(reservePrice).toLocaleString("en-GB")}</Text>
