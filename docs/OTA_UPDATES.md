@@ -7,7 +7,7 @@ new TestFlight/App Store build** via EAS Update.
 - App config (`app.json` → `expo.updates`) points at this project's update URL
   on `u.expo.dev`. The Expo project id is `aa330a36-df38-452f-9cb8-4c02c780701f`.
 - `runtimeVersion.policy = "appVersion"` — a build's runtime version is its
-  `expo.version` (currently **1.0.0**). Updates only ship to builds whose
+  `expo.version` (currently **1.0.2**). Updates only ship to builds whose
   runtime version matches the update's runtime version. Changing the app
   version requires a new native build (see below).
 - Builds carry a **channel** (set in `eas.json`): `production` builds pull
@@ -73,6 +73,9 @@ Devices fetch the rolled-back JS on the next launch.
   before `expo-updates` was added, so they have no updater. Only **future**
   builds (the next `eas build` after this commit) include the updater and can
   receive OTA.
-- Updates only ship to builds whose **runtime version** matches. Today that's
-  `1.0.0`. Once you bump `expo.version`, those older builds will be left on
-  the last update published to their runtime version.
+- Updates only ship to builds whose **runtime version** matches. As of
+  2026-10-09 store binaries run **1.0.0**, **1.0.1** (released 2026-10-07) and
+  **1.0.2** (submitted 2026-10-09). Publish each fix once per runtime that
+  still has users, temporarily setting `expo.version` to that runtime (never
+  commit the temporary value). Builds on a runtime you skip stay on the last
+  update published to it.
