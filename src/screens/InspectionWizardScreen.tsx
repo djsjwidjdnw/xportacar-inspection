@@ -15,7 +15,6 @@ import { Spinner } from "../components/Spinner";
 import { supabase } from "../lib/supabase";
 import { theme, formatKm } from "../lib/theme";
 import { confirmAsync } from "../lib/ui";
-import { estimateValuation, getMarketValuation, type Valuation } from "../lib/valuation";
 import { catalogTrims } from "../lib/trimCatalog";
 import { useAuth } from "../lib/auth";
 import { useTranslation, panelLabelKey } from "../lib/i18n";
@@ -408,38 +407,14 @@ export function InspectionWizardScreen({
   // Photo step — which sections are expanded (exterior open by default).
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({ exterior: true });
 
-  // Market estimate + auto-fill. Auto-fills starting=avg / reserve=min until
-  // the inspector edits a price (or for an existing vehicle with saved prices).
-  // Instant reference-table estimate, upgraded to live market data (debounced)
-  // when make/model/year are filled in.
-  const [pricesTouched, setPricesTouched] = useState<boolean>(!!incomingId);
-  const referenceEstimate = useMemo<Valuation | null>(() => {
-    if (!make.trim() || !model.trim() || !year.trim()) return null;
-    return estimateValuation({ make, model, trim: trim.trim() || undefined, year: Number(year), mileageKm: Number(mileage) || undefined });
-  }, [make, model, trim, year, mileage]);
-  const [liveValuation, setLiveValuation] = useState<Valuation | null>(null);
-  // Re-pull market value whenever make/model/year/mileage OR trim changes
-  // (debounced 600ms). Trim drives the figure: a base→SVJ swap re-fetches and
-  // re-prices. Trim filtering happens inside getMarketValuation/parseListings.
-  useEffect(() => {
-    setLiveValuation(null);
-    if (!make.trim() || !model.trim() || !year.trim()) return;
-    let on = true;
-    const id = setTimeout(() => {
-      getMarketValuation({ make, model, trim: trim.trim() || undefined, year: Number(year), mileageKm: Number(mileage) || undefined })
-        .then((v) => { if (on && v.source === "market_data") setLiveValuation(v); });
-    }, 600);
-    return () => { on = false; clearTimeout(id); };
-  }, [make, model, trim, year, mileage]);
-  const marketEstimate = liveValuation ?? referenceEstimate;
-  // Fixed-price marketplace: the reserve is an auction-only field, shown (and
-  // auto-filled) only while app_settings.bidding_enabled is on.
+  // The asking price is what the seller asks, typed by the inspector. Buyers
+  // see it labelled "Seller's asking price (UAE)" when UAE market data is
+  // missing, so nothing pre-fills it. (The old auto.dev US "market estimate"
+  // that used to pre-fill it was removed 2026-10-15; real UAE / EU market
+  // prices are looked up on the server when a car is published.)
+  // Fixed-price marketplace: the reserve is an auction-only field, shown only
+  // while app_settings.bidding_enabled is on.
   const bidding = useBiddingEnabled();
-  useEffect(() => {
-    if (!marketEstimate || pricesTouched || readOnly) return;
-    setStartingPrice(String(Math.round(marketEstimate.avgEur * AED_PER_EUR)));
-    if (bidding) setReservePrice(String(Math.round(marketEstimate.minEur * AED_PER_EUR)));
-  }, [marketEstimate, pricesTouched, readOnly, bidding]);
 
   // Trim auto-suggest — distinct trims already listed for this make+model (real
   // local data, shown first) merged with the static exotic/luxury catalog as a
@@ -604,7 +579,6 @@ export function InspectionWizardScreen({
         setMileage(data.mileage); setColor(data.color); setCity(data.city);
         setSellerName(data.sellerName); setSellerPhone(data.sellerPhone);
         setStartingPrice(data.startingPrice); setReservePrice(data.reservePrice);
-        if (data.startingPrice || data.reservePrice) setPricesTouched(true);
         setNotes(data.notes ?? "");
         setBodyType(data.bodyType ?? ""); setEngine(data.engine ?? ""); setDrivetrain(data.drivetrain ?? "");
         if (data.transmission === "automatic" || data.transmission === "manual") setTransmission(data.transmission);
@@ -1471,33 +1445,6 @@ export function InspectionWizardScreen({
               <Field label={t("details.sellerPhone")} style={{ flex: 1 }}><TextInput value={sellerPhone} onChangeText={setSellerPhone} keyboardType="phone-pad" style={styles.input} editable={!readOnly} placeholder="+971 50 …" placeholderTextColor={theme.colors.textLight} /></Field>
             </View>
 
-            {/* Live market estimate from make/model/year/mileage. */}
-            {marketEstimate && (
-              <View style={styles.estCard}>
-                <View style={styles.estHeaderRow}>
-                  <Icon name="pricetag-outline" size={14} color={theme.colors.brand} />
-                  <Text style={styles.estTitle}>{t("details.marketEstimate")}</Text>
-                </View>
-                <View style={styles.estCols}>
-                  <EstCol label={t("details.min")} value={Math.round(marketEstimate.minEur * AED_PER_EUR)} />
-                  <EstCol label={t("details.avg")} value={Math.round(marketEstimate.avgEur * AED_PER_EUR)} highlight />
-                  <EstCol label={t("details.max")} value={Math.round(marketEstimate.maxEur * AED_PER_EUR)} />
-                </View>
-                <Text style={styles.estNote}>
-                  {marketEstimate.source === "market_data"
-                    ? t("details.estComparable", { count: marketEstimate.dataPoints })
-                    : t("details.estReference")}
-                </Text>
-                {/* Trim-driven feedback: confirm the figure reflects the chosen
-                    trim, or nudge the inspector to set it for a sharper price. */}
-                {trim.trim()
-                  ? marketEstimate.trimMatched && (
-                      <Text style={styles.estTrimNote}>{t("details.estTrimMatched", { trim: trim.trim() })}</Text>
-                    )
-                  : <Text style={styles.estTrimNote}>{t("details.estModelOnly")}</Text>}
-              </View>
-            )}
-
             {/* Pricing — sent to the admin panel with the rest of the
                 inspection. Admin can still override either value. */}
             <View style={styles.priceHeader}>
@@ -1508,7 +1455,7 @@ export function InspectionWizardScreen({
               <Field label={`${t("details.startingPrice")} (AED)`} required style={{ flex: 1 }}>
                 <TextInput
                   value={startingPrice}
-                  onChangeText={(v) => { setStartingPrice(v.replace(/[^0-9]/g, "")); setPricesTouched(true); }}
+                  onChangeText={(v) => setStartingPrice(v.replace(/[^0-9]/g, ""))}
                   keyboardType="number-pad"
                   style={styles.input}
                   editable={!readOnly}
@@ -1519,7 +1466,7 @@ export function InspectionWizardScreen({
               {bidding && <Field label={`${t("details.reservePrice")} (AED)`} style={{ flex: 1 }}>
                 <TextInput
                   value={reservePrice}
-                  onChangeText={(v) => { setReservePrice(v.replace(/[^0-9]/g, "")); setPricesTouched(true); }}
+                  onChangeText={(v) => setReservePrice(v.replace(/[^0-9]/g, ""))}
                   keyboardType="number-pad"
                   style={styles.input}
                   editable={!readOnly}
@@ -2144,17 +2091,6 @@ function Card({ children }: { children: React.ReactNode }) {
   return <View style={styles.card}>{children}</View>;
 }
 
-function EstCol({ label, value, highlight }: { label: string; value: number; highlight?: boolean }) {
-  return (
-    <View style={styles.estCol}>
-      <Text style={styles.estColLabel}>{label}</Text>
-      <Text style={[styles.estColValue, highlight && { color: theme.colors.brand }]}>
-        AED {value.toLocaleString("en-GB")}
-      </Text>
-    </View>
-  );
-}
-
 function SummaryCard({ icon, value, label, complete }: { icon: string; value: string; label: string; complete?: boolean }) {
   return (
     <View style={styles.summaryItem}>
@@ -2379,16 +2315,6 @@ const styles = StyleSheet.create({
   priceHeaderText: { fontSize: 12, fontWeight: "800", color: theme.colors.brand, textTransform: "uppercase", letterSpacing: 0.5 },
   priceHint: { fontSize: 11, color: theme.colors.textLight, lineHeight: 16, marginTop: 4 },
 
-  // Market estimate card
-  estCard: { marginTop: 8, marginBottom: 4, padding: 14, borderRadius: theme.radius.lg, backgroundColor: theme.colors.brandLight, borderWidth: 1, borderColor: "#b2ddff" },
-  estHeaderRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 10 },
-  estTitle: { fontSize: 12, fontWeight: "800", color: theme.colors.brand, textTransform: "uppercase", letterSpacing: 0.5 },
-  estCols: { flexDirection: "row", gap: 8 },
-  estCol: { flex: 1, alignItems: "center", paddingVertical: 8, borderRadius: theme.radius.md, backgroundColor: theme.colors.white },
-  estColLabel: { fontSize: 10, fontWeight: "800", color: theme.colors.textLight, textTransform: "uppercase", letterSpacing: 0.5 },
-  estColValue: { fontSize: 15, fontWeight: "800", color: theme.colors.text, marginTop: 3 },
-  estNote: { fontSize: 11, color: theme.colors.textMuted, marginTop: 10, lineHeight: 15 },
-  estTrimNote: { fontSize: 11, fontWeight: "600", color: theme.colors.brand, marginTop: 4, lineHeight: 15 },
   trimSuggestRow: { marginTop: 8 },
   trimChip: { backgroundColor: theme.colors.brandLight, borderColor: theme.colors.brand, borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
   trimChipText: { fontSize: 12, fontWeight: "600", color: theme.colors.brand },

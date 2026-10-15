@@ -1,7 +1,7 @@
 // trimCatalog.ts — a SHORT static seed of common exotic / luxury trims, used to
-// auto-suggest the trim field in the inspection wizard. Trim drives valuation
+// auto-suggest the trim field in the inspection wizard. Trim matters to price
 // (a base Aventador vs an SVJ is a >2× swing), so making the right trim easy to
-// pick keeps the live market estimate honest.
+// pick keeps the listing accurate.
 //
 // These suggestions are MERGED with the distinct trims already present in the
 // vehicles table (real local data is shown first); this catalog is the fallback

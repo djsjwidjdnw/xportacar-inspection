@@ -2,11 +2,10 @@
 // Make and Model dropdowns (step 1 — Details).
 //
 // Design notes:
-// - `value` is the CANONICAL English make stored on vehicles.make. It is
-//   kept lowercase-compatible with the valuation reference table
-//   (src/lib/valuation.ts) so picking "Mercedes-Benz" / "Land Rover" still
-//   resolves a market estimate. Never translate these — only the UI chrome
-//   (labels/placeholders) is localised, exactly like the damage panels.
+// - `value` is the CANONICAL English make stored on vehicles.make; the server's
+//   market price lookup builds its Dubizzle search from it. Never translate
+//   these — only the UI chrome (labels/placeholders) is localised, exactly
+//   like the damage panels.
 // - `label` (optional) is what the picker row shows when it differs from the
 //   stored value (e.g. UAE buyers say "Range Rover" but the make is Land Rover).
 // - `aliases` widen the type-to-filter search so "range rover", "vw",
